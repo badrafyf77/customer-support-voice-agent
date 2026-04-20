@@ -3,14 +3,11 @@ logger = logging.getLogger(__name__)
 import os
 
 from turndetect import strip_ending_punctuation
-from difflib import SequenceMatcher
 from colors import Colors
 from text_similarity import TextSimilarity
-from scipy import signal
 import numpy as np
 import threading
 import textwrap
-import torch
 import json
 import copy
 import time
@@ -453,7 +450,7 @@ class TranscriptionProcessor:
         """
         text = text.lower()
         # Remove all non-alphanumeric characters (keeping spaces)
-        text = re.sub(r'[^a-z0-9\s]', '', text) # Keep spaces for SequenceMatcher
+        text = re.sub(r'[^a-z0-9\s]', '', text) # Keep spaces for downstream similarity checks
         # Remove extra whitespace and trim
         text = re.sub(r'\s+', ' ', text).strip()
         return text

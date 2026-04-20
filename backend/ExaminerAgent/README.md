@@ -73,7 +73,7 @@ For each oral exam session:
 - NVIDIA GPU drivers and `nvidia-smi` if you want GPU-backed local inference
 - NVIDIA Container Toolkit for GPU Docker access
 
-### Default stack: vLLM + examiner + evaluator
+### Default stack: vLLM + examiner
 
 From this directory:
 
@@ -86,7 +86,6 @@ Default ports:
 
 - app: `http://162.243.59.37:8080`
 - vLLM: `http://162.243.59.37:8000`
-- evaluator-agent: `http://162.243.59.37:8090`
 
 Useful checks:
 
@@ -102,8 +101,8 @@ The first startup can take a long time because the image builds and model assets
 
 | File                      | Stack                       | App Port | When To Use It                                     |
 | ------------------------- | --------------------------- | -------- | -------------------------------------------------- |
-| `docker-compose.yml`      | examiner + vLLM + evaluator | `8080`   | recommended default                                |
-| `docker-compose.vllm.yml` | examiner + vLLM             | `8080`   | older retained variant (expects evaluator on host) |
+| `docker-compose.yml`      | examiner + vLLM             | `8080`   | recommended default                                |
+| `docker-compose.vllm.yml` | examiner + vLLM             | `8080`   | older retained variant with fewer runtime settings |
 
 ## Configuration
 
@@ -129,8 +128,6 @@ STT_MODEL=medium.en
 STT_REALTIME_MODEL=small.en
 STT_USE_MAIN_MODEL_FOR_REALTIME=true
 TURN_DETECTION_DEVICE=cpu
-EVALUATOR_AGENT_BASE_URL=http://162.243.59.37:8090
-EVALUATOR_TRIGGER_TIMEOUT_SECONDS=5
 ```
 
 ### Supabase integration
@@ -157,6 +154,7 @@ They are used for:
 Main endpoint:
 
 - `/ws`
+- `/voice-reference`
 
 Typical query parameters:
 
@@ -165,6 +163,8 @@ Typical query parameters:
 - `attempt_id`
 
 The frontend oral room uses these to bind the live session to an exam attempt.
+
+Evaluation handoff is not triggered by `examiner-agent` itself anymore. The oral attempt is submitted here, and any evaluator workflow should be triggered by the frontend or another backend service after submission.
 
 ## Notes For Frontend Integration
 

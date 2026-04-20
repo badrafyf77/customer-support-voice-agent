@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Set, Tuple, Dict, Union # Added for type hinting
+from typing import Optional, Set, Tuple # Added for type hinting
 
 logger = logging.getLogger(__name__)
 from colors import Colors # Assuming this is needed externally

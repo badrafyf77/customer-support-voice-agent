@@ -1,5 +1,5 @@
 # server.py
-from queue import Queue, Empty
+from queue import Empty
 import logging
 from logsetup import setup_logging
 setup_logging(logging.INFO)
@@ -30,18 +30,16 @@ import threading # Keep threading for SpeechPipelineManager internals and AbortW
 import sys
 import os # Added for environment variable access
 import re
-from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
-from typing import Any, Dict, Optional, Callable # Added for type hints in docstrings
+from typing import Any, Optional # Added for type hints in docstrings
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from starlette.responses import HTMLResponse, JSONResponse, Response, FileResponse
+from starlette.responses import JSONResponse
 
 
 def _load_env_file_if_available() -> None:
@@ -190,16 +188,6 @@ VLLM_HEALTHCHECK_INTERVAL_SECONDS = max(
     0.5,
     _read_float_env("VLLM_HEALTHCHECK_INTERVAL_SECONDS", 2.0),
 )
-DEFAULT_EVALUATOR_AGENT_BASE_URL = "http://162.243.59.37:8090"
-EVALUATOR_AGENT_BASE_URL = os.getenv(
-    "EVALUATOR_AGENT_BASE_URL",
-    DEFAULT_EVALUATOR_AGENT_BASE_URL,
-).strip().rstrip("/")
-EVALUATOR_TRIGGER_TIMEOUT_SECONDS = max(
-    1.0,
-    _read_float_env("EVALUATOR_TRIGGER_TIMEOUT_SECONDS", 5.0),
-)
-
 if VOICE_RUNTIME_MAX_CONCURRENT < VOICE_RUNTIME_MIN_WARM:
     logger.warning(
         "🖥️⚠️ VOICE_RUNTIME_MAX_CONCURRENT (%s) is lower than VOICE_RUNTIME_MIN_WARM (%s). Clamping max to min.",
@@ -212,8 +200,6 @@ if VOICE_RUNTIME_MAX_CONCURRENT < VOICE_RUNTIME_MIN_WARM:
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-#from handlerequests import LanguageProcessor
-#from audio_out import AudioOutProcessor
 from database import get_database_client
 from user_context import SystemPromptBuilder
 from exam_graph import ExamSessionGraphController
@@ -295,115 +281,6 @@ async def _wait_for_vllm_ready(base_url: str) -> None:
         await asyncio.sleep(VLLM_HEALTHCHECK_INTERVAL_SECONDS)
 
 
-def _post_json(url: str, payload: Dict[str, Any], timeout_seconds: float) -> Dict[str, Any]:
-    """Send a small JSON payload and return parsed JSON body when available."""
-    request = Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request, timeout=timeout_seconds) as response:
-        raw = response.read()
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            return {}
-
-
-async def trigger_attempt_evaluation(
-    attempt_id: str,
-    exam_id: Optional[str] = None,
-    triggered_by_user_id: Optional[str] = None,
-) -> None:
-    """
-    Request asynchronous evaluation for a submitted attempt.
-
-    This call is best-effort and must never block oral session finalization.
-    """
-    if not attempt_id:
-        return
-
-    if not EVALUATOR_AGENT_BASE_URL:
-        logger.warning("⚠️ Evaluator handoff skipped because EVALUATOR_AGENT_BASE_URL is empty")
-        return
-
-    url = f"{EVALUATOR_AGENT_BASE_URL}/evaluate-attempt"
-    payload: Dict[str, Any] = {
-        "attempt_id": attempt_id,
-        "mode": "async",
-    }
-    if exam_id:
-        payload["exam_id"] = exam_id
-    if triggered_by_user_id:
-        payload["triggered_by_user_id"] = triggered_by_user_id
-
-    try:
-        response_payload = await asyncio.to_thread(
-            _post_json,
-            url,
-            payload,
-            EVALUATOR_TRIGGER_TIMEOUT_SECONDS,
-        )
-        accepted = bool(response_payload.get("accepted"))
-        status = str(response_payload.get("status") or "unknown")
-        if accepted:
-            log_event("🤖", f"Evaluator queued for attempt {attempt_id[-4:]} (status={status})")
-        else:
-            logger.warning(
-                "⚠️ Evaluator trigger returned accepted=false for attempt %s: %s",
-                attempt_id,
-                response_payload,
-            )
-    except HTTPError as exc:
-        body = ""
-        with suppress(Exception):
-            body = exc.read().decode("utf-8")
-        logger.warning(
-            "⚠️ Evaluator trigger HTTP error for attempt %s: status=%s body=%s",
-            attempt_id,
-            getattr(exc, "code", "unknown"),
-            body or str(exc),
-        )
-    except URLError as exc:
-        logger.warning("⚠️ Evaluator trigger network error for attempt %s: %s", attempt_id, exc)
-    except TimeoutError:
-        logger.warning("⚠️ Evaluator trigger timed out for attempt %s", attempt_id)
-    except Exception as exc:
-        logger.error("⚠️ Evaluator trigger failed for attempt %s: %s", attempt_id, exc)
-
-# --------------------------------------------------------------------
-# Custom no-cache StaticFiles
-# --------------------------------------------------------------------
-class NoCacheStaticFiles(StaticFiles):
-    """
-    Serves static files without allowing client-side caching.
-
-    Overrides the default Starlette StaticFiles to add 'Cache-Control' headers
-    that prevent browsers from caching static assets. Useful for development.
-    """
-    async def get_response(self, path: str, scope: Dict[str, Any]) -> Response:
-        """
-        Gets the response for a requested path, adding no-cache headers.
-
-        Args:
-            path: The path to the static file requested.
-            scope: The ASGI scope dictionary for the request.
-
-        Returns:
-            A Starlette Response object with cache-control headers modified.
-        """
-        response: Response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        # These might not be strictly necessary with no-store, but belt and suspenders
-        if "etag" in response.headers:
-             response.headers.__delitem__("etag")
-        if "last-modified" in response.headers:
-             response.headers.__delitem__("last-modified")
-        return response
-
 # --------------------------------------------------------------------
 # Lifespan management
 # --------------------------------------------------------------------
@@ -467,8 +344,6 @@ async def lifespan(app: FastAPI):
 # FastAPI app instance
 # --------------------------------------------------------------------
 app = FastAPI(lifespan=lifespan)
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-HAS_STATIC_ASSETS = STATIC_DIR.is_dir()
 
 # Enable CORS if needed
 app.add_middleware(
@@ -478,57 +353,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Mount static files with no cache when this backend is used in standalone mode.
-# In the monorepo setup, the React frontend is a separate app and these assets
-# are intentionally absent.
-if HAS_STATIC_ASSETS:
-    app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
-else:
-    logger.warning(
-        "Static frontend assets not found at %s; serving WebSocket/API only.",
-        STATIC_DIR,
-    )
-
-@app.get("/favicon.ico")
-async def favicon():
-    """
-    Serves the favicon.ico file.
-
-    Returns:
-        A FileResponse containing the favicon.
-    """
-    favicon_path = STATIC_DIR / "favicon.ico"
-    if not favicon_path.is_file():
-        return Response(status_code=404)
-    return FileResponse(favicon_path)
-
-@app.get("/app.js")
-async def app_js():
-    """
-    Serves the app.js file.
-
-    Returns:
-        A FileResponse containing the app.js
-    """
-    app_js_path = STATIC_DIR / "app.js"
-    if not app_js_path.is_file():
-        return Response(status_code=404)
-    return FileResponse(app_js_path)
-
-@app.get("/app.css")
-async def app_css():
-    """
-    Serves the app.css file.
-
-    Returns:
-        A FileResponse containing the app.css
-    """
-    app_css_path = STATIC_DIR / "app.css"
-    if not app_css_path.is_file():
-        return Response(status_code=404)
-    return FileResponse(app_css_path)
-
 
 @app.get("/voice-reference")
 async def check_voice_reference(user_id: str):
@@ -596,28 +420,16 @@ async def upload_voice_reference(
 
 
 @app.get("/")
-async def get_index() -> HTMLResponse:
-    """
-    Serves the main index.html page.
-
-    Reads the content of static/index.html and returns it as an HTML response.
-
-    Returns:
-        An HTMLResponse containing the content of index.html.
-    """
-    index_path = STATIC_DIR / "index.html"
-    if not index_path.is_file():
-        return HTMLResponse(
-            content=(
-                "<html><body><h1>examiner-agent backend is running.</h1>"
-                "<p>This deployment exposes the WebSocket endpoint at <code>/ws</code> "
-                "and does not bundle a frontend.</p></body></html>"
-            )
-        )
-
-    with open(index_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    return HTMLResponse(content=html_content)
+async def get_index() -> JSONResponse:
+    """Return a small status payload for the standalone examiner backend."""
+    return JSONResponse(
+        {
+            "service": "examiner-agent",
+            "status": "ok",
+            "websocket_path": "/ws",
+            "voice_reference_path": "/voice-reference",
+        }
+    )
 
 # --------------------------------------------------------------------
 # Utility functions

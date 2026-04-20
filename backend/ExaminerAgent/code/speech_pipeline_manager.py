@@ -4,7 +4,6 @@ import threading
 import logging
 import time
 from queue import Queue, Empty
-import sys
 import json
 import re
 
