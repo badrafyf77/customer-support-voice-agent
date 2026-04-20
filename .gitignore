@@ -1,0 +1,51 @@
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# JavaScript / Next.js
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/dist/
+**/coverage/
+**/.turbo/
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+**/venv/
+
+# Local environment and secrets
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+!**/.env.local.example
+
+# Certificate / key material
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt
+**/*.cer
+**/*id_rsa*
+**/*.jks
+**/*.keystore
+
+# Local database files
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+
+# Logs
+**/*.log
+
+
+#claude files
+**/.claude

@@ -1,0 +1,77 @@
+services:
+  # Your FastAPI Application Service
+  app:
+    build: .
+    image: examiner-agent:latest
+    container_name: examiner-agent-app
+    ports:
+      - "8080:8000" # Changed to 8080 since vLLM uses 8000
+    environment:
+      # --- LLM Configuration (vLLM) ---
+      - LLM_PROVIDER=vllm
+      - LLM_MODEL=Qwen/Qwen2.5-72B-Instruct-AWQ
+      - VLLM_BASE_URL=http://vllm:8000/v1
+
+      # --- Other App Environment Variables ---
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_AUDIO_QUEUE_SIZE=${MAX_AUDIO_QUEUE_SIZE:-50}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - EVALUATOR_AGENT_BASE_URL=${EVALUATOR_AGENT_BASE_URL:-http://162.243.59.37:8090}
+      - EVALUATOR_TRIGGER_TIMEOUT_SECONDS=${EVALUATOR_TRIGGER_TIMEOUT_SECONDS:-5}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/home/appuser/.cache/huggingface
+      - TORCH_HOME=/home/appuser/.cache/torch
+    volumes:
+      # Mount cache directories
+      - huggingface_cache:/home/appuser/.cache/huggingface
+      - torch_cache:/home/appuser/.cache/torch
+    depends_on:
+      - vllm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+    restart: unless-stopped
+
+  # vLLM Server Service - Optimized for multiple concurrent users
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: examiner-agent-vllm
+    ports:
+      - "8000:8000"
+    command:
+      - Qwen/Qwen2.5-72B-Instruct-AWQ
+      - --dtype=auto
+      - --max-model-len=6144
+      - --gpu-memory-utilization=0.8
+      - --max-num-seqs=24
+      - --enable-chunked-prefill
+      - --max-num-batched-tokens=8192
+      - --tensor-parallel-size=1
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+    restart: unless-stopped
+    shm_size: "4gb" # Shared memory for better performance
+
+# Define named volumes for persistent data
+volumes:
+  huggingface_cache:
+    driver: local
+  torch_cache:
+    driver: local

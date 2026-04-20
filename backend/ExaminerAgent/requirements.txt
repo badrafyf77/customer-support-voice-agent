@@ -1,0 +1,30 @@
+# speech to text and text to speech
+realtimestt==0.3.104
+
+# TTS
+realtimetts[kokoro,coqui,orpheus]==0.5.5
+
+# webserver dependencies
+fastapi
+uvicorn
+
+# configuration
+python-dotenv
+
+# llm providers
+openai
+langgraph
+
+# database
+supabase
+postgrest
+
+# voice / speaker verification (ECAPA-TDNN)
+speechbrain
+torchaudio
+pydub
+scipy
+scikit-learn
+
+# multipart uploads for the /voice-reference endpoint
+python-multipart
