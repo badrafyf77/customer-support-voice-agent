@@ -99,10 +99,10 @@ The first startup can take a long time because the image builds and model assets
 
 ## Compose files
 
-| File                      | Stack                       | App Port | When To Use It                                     |
-| ------------------------- | --------------------------- | -------- | -------------------------------------------------- |
-| `docker-compose.yml`      | examiner + vLLM             | `8080`   | recommended default                                |
-| `docker-compose.vllm.yml` | examiner + vLLM             | `8080`   | older retained variant with fewer runtime settings |
+| File                      | Stack           | App Port | When To Use It                                     |
+| ------------------------- | --------------- | -------- | -------------------------------------------------- |
+| `docker-compose.yml`      | examiner + vLLM | `8080`   | recommended default                                |
+| `docker-compose.vllm.yml` | examiner + vLLM | `8080`   | older retained variant with fewer runtime settings |
 
 ## Configuration
 
@@ -112,7 +112,7 @@ Copy [`.env.example`](./.env.example) to `.env` and fill in what applies to your
 
 ```bash
 LLM_PROVIDER=vllm
-LLM_MODEL=Qwen/Qwen2.5-72B-Instruct-AWQ
+LLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
 VLLM_BASE_URL=http://vllm:8000/v1
 
 LOG_LEVEL=INFO

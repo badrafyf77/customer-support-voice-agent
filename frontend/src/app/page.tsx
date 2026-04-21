@@ -1,8 +1,9 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
 
-const DEFAULT_VOICE_SERVER_URL = 'http://localhost:8000';
+const DEFAULT_VOICE_SERVER_URL =
+  "wss://8000-01kpr5kjeqaxgqte7z852k7mzk.cloudspaces.litng.ai";
 const SERVER_READY_TIMEOUT_MS = 60_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 const AUDIO_BATCH_SAMPLES = 2048;
@@ -11,9 +12,9 @@ const AUDIO_MESSAGE_BYTES = AUDIO_HEADER_BYTES + AUDIO_BATCH_SAMPLES * 2;
 
 type TranscriptMessage = {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
-  type: 'partial' | 'final';
+  type: "partial" | "final";
   finishComplete?: boolean;
   success?: boolean;
   error?: string;
@@ -30,11 +31,24 @@ type WebSocketPayload = {
 
 function normalizeServerUrl(value: string) {
   const trimmedValue = value.trim() || DEFAULT_VOICE_SERVER_URL;
-  return /^https?:\/\//i.test(trimmedValue) ? trimmedValue : `http://${trimmedValue}`;
+  return /^(https?|wss?):\/\//i.test(trimmedValue)
+    ? trimmedValue
+    : `http://${trimmedValue}`;
 }
 
 function buildWebSocketUrl(serverUrl: string) {
-  return new URL('/ws', normalizeServerUrl(serverUrl).replace(/^http/i, 'ws')).toString();
+  const baseUrl = new URL(normalizeServerUrl(serverUrl));
+
+  if (baseUrl.protocol === "http:") {
+    baseUrl.protocol = "ws:";
+  } else if (baseUrl.protocol === "https:") {
+    baseUrl.protocol = "wss:";
+  }
+
+  baseUrl.pathname = "/ws";
+  baseUrl.search = "";
+  baseUrl.hash = "";
+  return baseUrl.toString();
 }
 
 function base64ToInt16Array(value: string) {
@@ -49,9 +63,9 @@ function base64ToInt16Array(value: string) {
 }
 
 function createTranscriptMessage(
-  role: TranscriptMessage['role'],
+  role: TranscriptMessage["role"],
   content: string,
-  type: TranscriptMessage['type'],
+  type: TranscriptMessage["type"],
 ): TranscriptMessage {
   return {
     id: `${role}-${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -64,16 +78,21 @@ function createTranscriptMessage(
 function upsertUserMessage(
   previousMessages: TranscriptMessage[],
   content: string,
-  type: TranscriptMessage['type'],
+  type: TranscriptMessage["type"],
 ) {
   if (!content.trim()) {
     return previousMessages;
   }
 
-  const lastUserIndex = previousMessages.findLastIndex((message) => message.role === 'user');
-  const nextMessage = createTranscriptMessage('user', content, type);
+  const lastUserIndex = previousMessages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const nextMessage = createTranscriptMessage("user", content, type);
 
-  if (lastUserIndex === -1 || previousMessages[lastUserIndex].type !== 'partial') {
+  if (
+    lastUserIndex === -1 ||
+    previousMessages[lastUserIndex].type !== "partial"
+  ) {
     return [...previousMessages, nextMessage];
   }
 
@@ -93,7 +112,9 @@ function waitForReady(isReadyRef: { current: boolean }) {
       }
 
       if (Date.now() - startedAt >= SERVER_READY_TIMEOUT_MS) {
-        reject(new Error('The voice agent server did not become ready in time.'));
+        reject(
+          new Error("The voice agent server did not become ready in time."),
+        );
         return;
       }
 
@@ -107,8 +128,8 @@ function waitForReady(isReadyRef: { current: boolean }) {
 function useVoiceSocket(serverUrl: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [isReady, setIsReady] = useState(false);
-  const [serverStatus, setServerStatus] = useState('');
-  const [statusMessage, setStatusMessage] = useState('');
+  const [serverStatus, setServerStatus] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
 
@@ -123,19 +144,24 @@ function useVoiceSocket(serverUrl: string) {
     }
 
     const audioContext = new AudioContext({ sampleRate: 24_000 });
-    await audioContext.audioWorklet.addModule('/static/ttsPlaybackProcessor.js');
+    await audioContext.audioWorklet.addModule(
+      "/static/ttsPlaybackProcessor.js",
+    );
     await audioContext.resume();
 
-    const ttsWorkletNode = new AudioWorkletNode(audioContext, 'tts-playback-processor');
+    const ttsWorkletNode = new AudioWorkletNode(
+      audioContext,
+      "tts-playback-processor",
+    );
     ttsWorkletNode.port.onmessage = ({ data }) => {
-      if (data.type === 'ttsPlaybackStarted') {
+      if (data.type === "ttsPlaybackStarted") {
         setIsTtsPlaying(true);
-        socketRef.current?.send(JSON.stringify({ type: 'tts_start' }));
+        socketRef.current?.send(JSON.stringify({ type: "tts_start" }));
       }
 
-      if (data.type === 'ttsPlaybackStopped') {
+      if (data.type === "ttsPlaybackStopped") {
         setIsTtsPlaying(false);
-        socketRef.current?.send(JSON.stringify({ type: 'tts_stop' }));
+        socketRef.current?.send(JSON.stringify({ type: "tts_stop" }));
       }
     };
 
@@ -158,45 +184,53 @@ function useVoiceSocket(serverUrl: string) {
 
     setIsConnected(false);
     setIsReady(false);
-    setServerStatus('');
-    setStatusMessage('');
+    setServerStatus("");
+    setStatusMessage("");
     setIsTtsPlaying(false);
   }, []);
 
   const handleJsonMessage = useCallback((payload: WebSocketPayload) => {
     switch (payload.type) {
-      case 'status':
-        setServerStatus(payload.status || '');
-        setStatusMessage(payload.message || '');
-        setIsReady(payload.status === 'ready');
+      case "status":
+        setServerStatus(payload.status || "");
+        setStatusMessage(payload.message || "");
+        setIsReady(payload.status === "ready");
         break;
 
-      case 'partial_user_request':
+      case "partial_user_request":
         setMessages((previousMessages) =>
-          payload.content ? upsertUserMessage(previousMessages, payload.content, 'partial') : previousMessages,
+          payload.content
+            ? upsertUserMessage(previousMessages, payload.content, "partial")
+            : previousMessages,
         );
         break;
 
-      case 'final_user_request':
+      case "final_user_request":
         setMessages((previousMessages) =>
-          payload.content ? upsertUserMessage(previousMessages, payload.content, 'final') : previousMessages,
+          payload.content
+            ? upsertUserMessage(previousMessages, payload.content, "final")
+            : previousMessages,
         );
         break;
 
-      case 'assistant_partial':
-      case 'partial_assistant_answer':
-      case 'assistant_sentence':
+      case "assistant_partial":
+      case "partial_assistant_answer":
+      case "assistant_sentence":
         setMessages((previousMessages) => {
           if (!payload.content?.trim()) {
             return previousMessages;
           }
 
           const lastAssistantIndex = previousMessages.findLastIndex(
-            (message) => message.role === 'assistant' && message.type === 'partial',
+            (message) =>
+              message.role === "assistant" && message.type === "partial",
           );
 
           if (lastAssistantIndex === -1) {
-            return [...previousMessages, createTranscriptMessage('assistant', payload.content, 'partial')];
+            return [
+              ...previousMessages,
+              createTranscriptMessage("assistant", payload.content, "partial"),
+            ];
           }
 
           const updatedMessages = [...previousMessages];
@@ -204,7 +238,8 @@ function useVoiceSocket(serverUrl: string) {
           updatedMessages[lastAssistantIndex] = {
             ...updatedMessages[lastAssistantIndex],
             content:
-              payload.type === 'assistant_sentence' && !previousContent.includes(payload.content)
+              payload.type === "assistant_sentence" &&
+              !previousContent.includes(payload.content)
                 ? `${previousContent} ${payload.content}`.trim()
                 : payload.content,
           };
@@ -213,47 +248,57 @@ function useVoiceSocket(serverUrl: string) {
         });
         break;
 
-      case 'final_assistant_answer':
+      case "final_assistant_answer":
         setMessages((previousMessages) => {
           if (!payload.content?.trim()) {
             return previousMessages;
           }
 
           const lastAssistantIndex = previousMessages.findLastIndex(
-            (message) => message.role === 'assistant' && message.type === 'partial',
+            (message) =>
+              message.role === "assistant" && message.type === "partial",
           );
 
           if (lastAssistantIndex === -1) {
-            return [...previousMessages, createTranscriptMessage('assistant', payload.content, 'final')];
+            return [
+              ...previousMessages,
+              createTranscriptMessage("assistant", payload.content, "final"),
+            ];
           }
 
           const updatedMessages = [...previousMessages];
           updatedMessages[lastAssistantIndex] = {
             ...updatedMessages[lastAssistantIndex],
             content: payload.content,
-            type: 'final',
+            type: "final",
           };
           return updatedMessages;
         });
         break;
 
-      case 'tts_chunk':
+      case "tts_chunk":
         if (ttsWorkletNodeRef.current && payload.content) {
-          ttsWorkletNodeRef.current.port.postMessage(base64ToInt16Array(payload.content));
+          ttsWorkletNodeRef.current.port.postMessage(
+            base64ToInt16Array(payload.content),
+          );
         }
         break;
 
-      case 'tts_interruption':
-      case 'stop_tts':
-        ttsWorkletNodeRef.current?.port.postMessage({ type: 'clear' });
+      case "tts_interruption":
+      case "stop_tts":
+        ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
         setIsTtsPlaying(false);
         break;
 
-      case 'finish_complete':
+      case "finish_complete":
         setMessages((previousMessages) => [
           ...previousMessages,
           {
-            ...createTranscriptMessage('assistant', payload.error || 'Voice chat ended.', 'final'),
+            ...createTranscriptMessage(
+              "assistant",
+              payload.error || "Voice chat ended.",
+              "final",
+            ),
             finishComplete: true,
             success: payload.success,
             error: payload.error,
@@ -283,7 +328,9 @@ function useVoiceSocket(serverUrl: string) {
 
       const timeoutId = window.setTimeout(() => {
         socket.close();
-        rejectOnce(new Error('Timed out while connecting to the voice chat server.'));
+        rejectOnce(
+          new Error("Timed out while connecting to the voice chat server."),
+        );
       }, SOCKET_CONNECT_TIMEOUT_MS);
 
       const cleanup = () => {
@@ -312,35 +359,35 @@ function useVoiceSocket(serverUrl: string) {
       socket.onopen = () => {
         setIsConnected(true);
         setIsReady(false);
-        setStatusMessage('Connecting...');
+        setStatusMessage("Connecting...");
         resolveOnce();
       };
 
       socket.onmessage = (event) => {
-        if (typeof event.data !== 'string') {
+        if (typeof event.data !== "string") {
           return;
         }
 
         try {
           handleJsonMessage(JSON.parse(event.data) as WebSocketPayload);
         } catch (error) {
-          console.error('Error parsing voice-agent socket message:', error);
+          console.error("Error parsing voice-agent socket message:", error);
         }
       };
 
       socket.onclose = () => {
         setIsConnected(false);
         setIsReady(false);
-        setStatusMessage('');
+        setStatusMessage("");
 
         if (!settled) {
-          rejectOnce(new Error('The voice chat server closed the connection.'));
+          rejectOnce(new Error("The voice chat server closed the connection."));
         }
       };
 
       socket.onerror = () => {
         setIsConnected(false);
-        rejectOnce(new Error('Unable to connect to the voice chat server.'));
+        rejectOnce(new Error("Unable to connect to the voice chat server."));
       };
 
       socketRef.current = socket;
@@ -363,11 +410,11 @@ function useVoiceSocket(serverUrl: string) {
 
   const clearHistory = useCallback(() => {
     setMessages([]);
-    sendMessage({ type: 'clear_history' });
+    sendMessage({ type: "clear_history" });
   }, [sendMessage]);
 
   const stopTts = useCallback(() => {
-    ttsWorkletNodeRef.current?.port.postMessage({ type: 'clear' });
+    ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
     setIsTtsPlaying(false);
   }, []);
 
@@ -388,7 +435,10 @@ function useVoiceSocket(serverUrl: string) {
   };
 }
 
-function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlayingState: () => boolean) {
+function useAudioCapture(
+  onAudioData: (data: ArrayBuffer) => void,
+  getTtsPlayingState: () => boolean,
+) {
   const [isCapturing, setIsCapturing] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
@@ -404,9 +454,13 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
       return;
     }
 
-    batchBufferRef.current = bufferPoolRef.current.pop() || new ArrayBuffer(AUDIO_MESSAGE_BYTES);
+    batchBufferRef.current =
+      bufferPoolRef.current.pop() || new ArrayBuffer(AUDIO_MESSAGE_BYTES);
     batchViewRef.current = new DataView(batchBufferRef.current);
-    batchInt16Ref.current = new Int16Array(batchBufferRef.current, AUDIO_HEADER_BYTES);
+    batchInt16Ref.current = new Int16Array(
+      batchBufferRef.current,
+      AUDIO_HEADER_BYTES,
+    );
     batchOffsetRef.current = 0;
   }, []);
 
@@ -432,7 +486,11 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
       return;
     }
 
-    for (let index = batchOffsetRef.current; index < AUDIO_BATCH_SAMPLES; index += 1) {
+    for (
+      let index = batchOffsetRef.current;
+      index < AUDIO_BATCH_SAMPLES;
+      index += 1
+    ) {
       batchInt16Ref.current[index] = 0;
     }
 
@@ -452,10 +510,13 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
     streamRef.current = stream;
 
     const audioContext = new AudioContext({ sampleRate: 48_000 });
-    await audioContext.audioWorklet.addModule('/static/pcmWorkletProcessor.js');
+    await audioContext.audioWorklet.addModule("/static/pcmWorkletProcessor.js");
     await audioContext.resume();
 
-    const workletNode = new AudioWorkletNode(audioContext, 'pcm-worklet-processor');
+    const workletNode = new AudioWorkletNode(
+      audioContext,
+      "pcm-worklet-processor",
+    );
     workletNode.port.onmessage = ({ data }) => {
       const incoming = new Int16Array(data);
       let readOffset = 0;
@@ -463,8 +524,14 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
       while (readOffset < incoming.length) {
         initializeBatch();
 
-        const copyLength = Math.min(incoming.length - readOffset, AUDIO_BATCH_SAMPLES - batchOffsetRef.current);
-        batchInt16Ref.current?.set(incoming.subarray(readOffset, readOffset + copyLength), batchOffsetRef.current);
+        const copyLength = Math.min(
+          incoming.length - readOffset,
+          AUDIO_BATCH_SAMPLES - batchOffsetRef.current,
+        );
+        batchInt16Ref.current?.set(
+          incoming.subarray(readOffset, readOffset + copyLength),
+          batchOffsetRef.current,
+        );
 
         batchOffsetRef.current += copyLength;
         readOffset += copyLength;
@@ -504,21 +571,21 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
 }
 
 function transcriptLabel(message: TranscriptMessage) {
-  return message.role === 'assistant' ? 'Assistant' : 'You';
+  return message.role === "assistant" ? "Assistant" : "You";
 }
 
 export default function Home() {
   const [serverUrl, setServerUrl] = useState(DEFAULT_VOICE_SERVER_URL);
   const [isStarting, setIsStarting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState("");
 
   const isReadyRef = useRef(false);
   const isTtsPlayingRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setServerUrl(params.get('server') || DEFAULT_VOICE_SERVER_URL);
+    setServerUrl(params.get("server") || DEFAULT_VOICE_SERVER_URL);
   }, []);
 
   const {
@@ -535,7 +602,10 @@ export default function Home() {
     isTtsPlaying,
   } = useVoiceSocket(serverUrl);
 
-  const { startCapture, stopCapture } = useAudioCapture(sendAudioData, () => isTtsPlayingRef.current);
+  const { startCapture, stopCapture } = useAudioCapture(
+    sendAudioData,
+    () => isTtsPlayingRef.current,
+  );
 
   useEffect(() => {
     isReadyRef.current = isReady;
@@ -546,7 +616,9 @@ export default function Home() {
   }, [isTtsPlaying]);
 
   useEffect(() => {
-    const finishMessage = [...messages].reverse().find((message) => message.finishComplete);
+    const finishMessage = [...messages]
+      .reverse()
+      .find((message) => message.finishComplete);
     if (!finishMessage) {
       return;
     }
@@ -555,7 +627,9 @@ export default function Home() {
     setIsRecording(false);
 
     if (!finishMessage.success) {
-      setErrorMessage(finishMessage.error || 'The voice chat could not be ended cleanly.');
+      setErrorMessage(
+        finishMessage.error || "The voice chat could not be ended cleanly.",
+      );
     }
   }, [messages, stopCapture]);
 
@@ -568,7 +642,7 @@ export default function Home() {
   }, [disconnect, stopCapture, stopTts]);
 
   const startSession = useCallback(async () => {
-    setErrorMessage('');
+    setErrorMessage("");
     setIsStarting(true);
 
     try {
@@ -578,7 +652,11 @@ export default function Home() {
       setIsRecording(true);
     } catch (error) {
       stopSession();
-      setErrorMessage(error instanceof Error ? error.message : 'Could not start the voice agent.');
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not start the voice agent.",
+      );
     } finally {
       setIsStarting(false);
     }
@@ -586,12 +664,17 @@ export default function Home() {
 
   const resetTranscript = useCallback(() => {
     clearHistory();
-    setErrorMessage('');
+    setErrorMessage("");
   }, [clearHistory]);
 
   const canStart = !isConnected && !isStarting;
-  const currentStatus = statusMessage || (isConnected ? 'Connected' : 'Disconnected');
-  const activityStatus = isTtsPlaying ? 'Speaking' : isRecording ? 'Listening' : 'Idle';
+  const currentStatus =
+    statusMessage || (isConnected ? "Connected" : "Disconnected");
+  const activityStatus = isTtsPlaying
+    ? "Speaking"
+    : isRecording
+      ? "Listening"
+      : "Idle";
 
   return (
     <main className="app-shell">
@@ -601,7 +684,9 @@ export default function Home() {
           <h1>Voice Chat</h1>
         </div>
         <div className="status-pill">
-          <span className={`status-dot ${isReady ? 'ready' : isConnected ? 'connecting' : ''}`} />
+          <span
+            className={`status-dot ${isReady ? "ready" : isConnected ? "connecting" : ""}`}
+          />
           <span>{currentStatus}</span>
         </div>
       </header>
@@ -610,26 +695,45 @@ export default function Home() {
         <aside className="controls-panel">
           <label>
             <span>Server</span>
-            <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} disabled={isConnected} />
+            <input
+              value={serverUrl}
+              onChange={(event) => setServerUrl(event.target.value)}
+              disabled={isConnected}
+            />
           </label>
 
-          {errorMessage ? <div className="error-box">{errorMessage}</div> : null}
+          {errorMessage ? (
+            <div className="error-box">{errorMessage}</div>
+          ) : null}
 
           <div className="button-grid">
-            <button type="button" className="primary-button" onClick={startSession} disabled={!canStart}>
-              {isStarting ? 'Starting...' : 'Start'}
+            <button
+              type="button"
+              className="primary-button"
+              onClick={startSession}
+              disabled={!canStart}
+            >
+              {isStarting ? "Starting..." : "Start"}
             </button>
             <button type="button" onClick={stopSession} disabled={!isConnected}>
               Stop
             </button>
-            <button type="button" className="reset-button" onClick={resetTranscript}>
+            <button
+              type="button"
+              className="reset-button"
+              onClick={resetTranscript}
+            >
               Reset Transcript
             </button>
           </div>
 
           <div className="mic-status">
-            <span className={`mic-dot ${isRecording ? 'active' : ''}`} />
-            <span>{isRecording ? 'Microphone is streaming.' : serverStatus || 'Ready to connect.'}</span>
+            <span className={`mic-dot ${isRecording ? "active" : ""}`} />
+            <span>
+              {isRecording
+                ? "Microphone is streaming."
+                : serverStatus || "Ready to connect."}
+            </span>
           </div>
         </aside>
 
@@ -645,7 +749,9 @@ export default function Home() {
             ) : (
               messages.map((message) => (
                 <article key={message.id} className={`message ${message.role}`}>
-                  <div className="message-label">{transcriptLabel(message)}</div>
+                  <div className="message-label">
+                    {transcriptLabel(message)}
+                  </div>
                   <p className="message-content">{message.content}</p>
                 </article>
               ))

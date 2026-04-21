@@ -9,7 +9,7 @@ services:
     environment:
       # --- LLM Configuration (vLLM) ---
       - LLM_PROVIDER=vllm
-      - LLM_MODEL=Qwen/Qwen2.5-72B-Instruct-AWQ
+      - LLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
       - VLLM_BASE_URL=http://vllm:8000/v1
 
       # --- Other App Environment Variables ---
@@ -43,7 +43,7 @@ services:
     ports:
       - "8000:8000"
     command:
-      - Qwen/Qwen2.5-72B-Instruct-AWQ
+      - Qwen/Qwen2.5-1.5B-Instruct
       - --dtype=auto
       - --max-model-len=6144
       - --gpu-memory-utilization=0.8

@@ -126,7 +126,7 @@ if LLM_START_PROVIDER not in {"vllm", "openai"}:
         LLM_START_PROVIDER,
     )
     LLM_START_PROVIDER = "vllm"
-LLM_START_MODEL = get_env("LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct-AWQ")
+LLM_START_MODEL = get_env("LLM_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
 
 NO_THINK = False
 DIRECT_STREAM = TTS_START_ENGINE=="orpheus"
