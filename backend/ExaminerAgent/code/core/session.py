@@ -1520,6 +1520,9 @@ class TranscriptionCallbacks:
 
 async def _build_voice_verification_manager(user_id: str | None, attempt_id: str | None, display_id: str):
     """Load the optional per-session voice verification helper."""
+    if not user_id and not attempt_id:
+        return None
+
     voice_verification_manager = None
     try:
         from services.database import get_database_client

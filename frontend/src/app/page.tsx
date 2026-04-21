@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-const DEFAULT_EXAM_SERVER_URL = 'http://localhost:8000';
+const DEFAULT_VOICE_SERVER_URL = 'http://localhost:8000';
 const SERVER_READY_TIMEOUT_MS = 60_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 const AUDIO_BATCH_SAMPLES = 2048;
@@ -28,33 +28,13 @@ type WebSocketPayload = {
   error?: string;
 };
 
-type WebSocketOptions = {
-  userId?: string;
-  examId?: string;
-  attemptId?: string;
-};
-
 function normalizeServerUrl(value: string) {
-  const trimmedValue = value.trim() || DEFAULT_EXAM_SERVER_URL;
+  const trimmedValue = value.trim() || DEFAULT_VOICE_SERVER_URL;
   return /^https?:\/\//i.test(trimmedValue) ? trimmedValue : `http://${trimmedValue}`;
 }
 
-function buildWebSocketUrl(serverUrl: string, options: WebSocketOptions) {
-  const url = new URL('/ws', normalizeServerUrl(serverUrl).replace(/^http/i, 'ws'));
-
-  if (options.userId) {
-    url.searchParams.set('user_id', options.userId);
-  }
-
-  if (options.examId) {
-    url.searchParams.set('exam_id', options.examId);
-  }
-
-  if (options.attemptId) {
-    url.searchParams.set('attempt_id', options.attemptId);
-  }
-
-  return url.toString();
+function buildWebSocketUrl(serverUrl: string) {
+  return new URL('/ws', normalizeServerUrl(serverUrl).replace(/^http/i, 'ws')).toString();
 }
 
 function base64ToInt16Array(value: string) {
@@ -124,7 +104,7 @@ function waitForReady(isReadyRef: { current: boolean }) {
   });
 }
 
-function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
+function useVoiceSocket(serverUrl: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [serverStatus, setServerStatus] = useState('');
@@ -273,7 +253,7 @@ function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
         setMessages((previousMessages) => [
           ...previousMessages,
           {
-            ...createTranscriptMessage('assistant', payload.error || 'Oral exam completed.', 'final'),
+            ...createTranscriptMessage('assistant', payload.error || 'Voice chat ended.', 'final'),
             finishComplete: true,
             success: payload.success,
             error: payload.error,
@@ -299,11 +279,11 @@ function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
 
     connectionPromiseRef.current = new Promise<void>((resolve, reject) => {
       let settled = false;
-      const socket = new WebSocket(buildWebSocketUrl(serverUrl, options));
+      const socket = new WebSocket(buildWebSocketUrl(serverUrl));
 
       const timeoutId = window.setTimeout(() => {
         socket.close();
-        rejectOnce(new Error('Timed out while connecting to the oral exam server.'));
+        rejectOnce(new Error('Timed out while connecting to the voice chat server.'));
       }, SOCKET_CONNECT_TIMEOUT_MS);
 
       const cleanup = () => {
@@ -354,20 +334,20 @@ function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
         setStatusMessage('');
 
         if (!settled) {
-          rejectOnce(new Error('The oral exam server closed the connection.'));
+          rejectOnce(new Error('The voice chat server closed the connection.'));
         }
       };
 
       socket.onerror = () => {
         setIsConnected(false);
-        rejectOnce(new Error('Unable to connect to the oral exam server.'));
+        rejectOnce(new Error('Unable to connect to the voice chat server.'));
       };
 
       socketRef.current = socket;
     });
 
     return connectionPromiseRef.current;
-  }, [handleJsonMessage, initializeAudioPlayback, options, serverUrl]);
+  }, [handleJsonMessage, initializeAudioPlayback, serverUrl]);
 
   const sendAudioData = useCallback((audioBuffer: ArrayBuffer) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -403,7 +383,6 @@ function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
     disconnect,
     clearHistory,
     sendAudioData,
-    sendMessage,
     stopTts,
     isTtsPlaying,
   };
@@ -525,17 +504,13 @@ function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlaying
 }
 
 function transcriptLabel(message: TranscriptMessage) {
-  return message.role === 'assistant' ? 'Examiner' : 'Student';
+  return message.role === 'assistant' ? 'Assistant' : 'You';
 }
 
 export default function Home() {
-  const [serverUrl, setServerUrl] = useState(DEFAULT_EXAM_SERVER_URL);
-  const [userId, setUserId] = useState('');
-  const [examId, setExamId] = useState('');
-  const [attemptId, setAttemptId] = useState('');
+  const [serverUrl, setServerUrl] = useState(DEFAULT_VOICE_SERVER_URL);
   const [isStarting, setIsStarting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [isFinishing, setIsFinishing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   const isReadyRef = useRef(false);
@@ -543,20 +518,8 @@ export default function Home() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setUserId(params.get('user_id') || '');
-    setExamId(params.get('exam_id') || '');
-    setAttemptId(params.get('attempt_id') || '');
-    setServerUrl(params.get('server') || DEFAULT_EXAM_SERVER_URL);
+    setServerUrl(params.get('server') || DEFAULT_VOICE_SERVER_URL);
   }, []);
-
-  const socketOptions = useMemo(
-    () => ({
-      userId: userId.trim() || undefined,
-      examId: examId.trim() || undefined,
-      attemptId: attemptId.trim() || undefined,
-    }),
-    [attemptId, examId, userId],
-  );
 
   const {
     isConnected,
@@ -568,10 +531,9 @@ export default function Home() {
     disconnect,
     clearHistory,
     sendAudioData,
-    sendMessage,
     stopTts,
     isTtsPlaying,
-  } = useVoiceSocket(serverUrl, socketOptions);
+  } = useVoiceSocket(serverUrl);
 
   const { startCapture, stopCapture } = useAudioCapture(sendAudioData, () => isTtsPlayingRef.current);
 
@@ -589,12 +551,11 @@ export default function Home() {
       return;
     }
 
-    setIsFinishing(false);
     stopCapture();
     setIsRecording(false);
 
     if (!finishMessage.success) {
-      setErrorMessage(finishMessage.error || 'The session could not be finalized.');
+      setErrorMessage(finishMessage.error || 'The voice chat could not be ended cleanly.');
     }
   }, [messages, stopCapture]);
 
@@ -603,7 +564,6 @@ export default function Home() {
     stopCapture();
     disconnect();
     setIsRecording(false);
-    setIsFinishing(false);
     setIsStarting(false);
   }, [disconnect, stopCapture, stopTts]);
 
@@ -624,21 +584,12 @@ export default function Home() {
     }
   }, [connect, startCapture, stopSession]);
 
-  const finishSession = useCallback(() => {
-    setErrorMessage('');
-    setIsFinishing(true);
-    stopTts();
-    stopCapture();
-    setIsRecording(false);
-    sendMessage({ type: 'finish_exam' });
-  }, [sendMessage, stopCapture, stopTts]);
-
   const resetTranscript = useCallback(() => {
     clearHistory();
     setErrorMessage('');
   }, [clearHistory]);
 
-  const canStart = Boolean(examId.trim() || attemptId.trim()) && !isConnected && !isStarting;
+  const canStart = !isConnected && !isStarting;
   const currentStatus = statusMessage || (isConnected ? 'Connected' : 'Disconnected');
   const activityStatus = isTtsPlaying ? 'Speaking' : isRecording ? 'Listening' : 'Idle';
 
@@ -647,7 +598,7 @@ export default function Home() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Veridex</p>
-          <h1>Oral Exam Voice Agent</h1>
+          <h1>Voice Chat</h1>
         </div>
         <div className="status-pill">
           <span className={`status-dot ${isReady ? 'ready' : isConnected ? 'connecting' : ''}`} />
@@ -662,21 +613,6 @@ export default function Home() {
             <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} disabled={isConnected} />
           </label>
 
-          <label>
-            <span>User ID</span>
-            <input value={userId} onChange={(event) => setUserId(event.target.value)} disabled={isConnected} />
-          </label>
-
-          <label>
-            <span>Exam ID</span>
-            <input value={examId} onChange={(event) => setExamId(event.target.value)} disabled={isConnected} />
-          </label>
-
-          <label>
-            <span>Attempt ID</span>
-            <input value={attemptId} onChange={(event) => setAttemptId(event.target.value)} disabled={isConnected} />
-          </label>
-
           {errorMessage ? <div className="error-box">{errorMessage}</div> : null}
 
           <div className="button-grid">
@@ -685,9 +621,6 @@ export default function Home() {
             </button>
             <button type="button" onClick={stopSession} disabled={!isConnected}>
               Stop
-            </button>
-            <button type="button" className="danger-button" onClick={finishSession} disabled={!isConnected || isFinishing}>
-              {isFinishing ? 'Finishing...' : 'Finish'}
             </button>
             <button type="button" className="reset-button" onClick={resetTranscript}>
               Reset Transcript

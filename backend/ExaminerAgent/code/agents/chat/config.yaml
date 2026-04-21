@@ -1,0 +1,7 @@
+stt_model: medium.en
+stt_realtime_model: small.en
+tts_voice:
+tts_engine: kokoro
+llm_provider: ${LLM_PROVIDER}
+llm_model: ${LLM_MODEL}
+language: en

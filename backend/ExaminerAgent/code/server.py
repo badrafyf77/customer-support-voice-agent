@@ -7,6 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
+from agents.chat.agent import build_chat_agent
 from agents.exam.agent import build_exam_agent
 from core.config import load_agent_config
 from core.logsetup import setup_logging
@@ -114,11 +115,17 @@ async def ws_endpoint(
     exam_id: str = None,
     attempt_id: str = None,
 ):
-    context = await database.load_session_context(user_id, exam_id, attempt_id)
-    brain, _initial_state = build_exam_agent(context)
-    config = getattr(app.state, "AGENT_CONFIG", None) or load_agent_config(AGENT_NAME)
-    config = {**config, "agent_name": AGENT_NAME}
-    await run_session(websocket, brain, config, app.state, user_id, context.get("exam_id"), attempt_id)
+    if user_id or exam_id or attempt_id:
+        context = await database.load_session_context(user_id, exam_id, attempt_id)
+        brain, _initial_state = build_exam_agent(context)
+        config = getattr(app.state, "AGENT_CONFIG", None) or load_agent_config(AGENT_NAME)
+        config = {**config, "agent_name": AGENT_NAME}
+        await run_session(websocket, brain, config, app.state, user_id, context.get("exam_id"), attempt_id)
+        return
+
+    brain, _initial_state = build_chat_agent({})
+    config = {**load_agent_config("chat"), "agent_name": "chat"}
+    await run_session(websocket, brain, config, app.state)
 
 
 if __name__ == "__main__":

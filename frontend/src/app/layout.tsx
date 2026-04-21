@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Oral Exam Voice Agent',
-  description: 'One-page oral exam voice-agent console.',
+  title: 'Voice Chat',
+  description: 'One-page voice chat console.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
