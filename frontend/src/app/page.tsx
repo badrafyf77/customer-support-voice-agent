@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_VOICE_SERVER_URL =
-  "wss://8000-01kpr5kjeqaxgqte7z852k7mzk.cloudspaces.litng.ai";
+  process.env.NEXT_PUBLIC_VOICE_SERVER_URL || "http://localhost:8080";
 const SERVER_READY_TIMEOUT_MS = 60_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 const AUDIO_BATCH_SAMPLES = 2048;
