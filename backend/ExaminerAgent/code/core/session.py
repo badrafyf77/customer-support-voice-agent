@@ -1407,21 +1407,17 @@ class TranscriptionCallbacks:
         logger.info(f"🖥️✅ Attempting to send final answer (length: {len(final_answer)}): '{final_answer[:150]}...' (Sent previously: {self.final_assistant_answer_sent})")
 
         if not self.final_assistant_answer_sent and final_answer:
-            import re
-            # Strip any leaked tool-call style control blocks before sending
-            final_answer = _strip_control_leak(final_answer)
-            # Clean up the final answer text - single pass for efficiency
-            # Replace all newlines and carriage returns with spaces
-            cleaned_answer = final_answer.replace('\\n', ' ').replace('\\r', ' ')
-            # Replace actual newlines and carriage returns
-            cleaned_answer = re.sub(r'[\r\n]+', ' ', cleaned_answer)
-            # Collapse multiple spaces into one and trim
-            cleaned_answer = re.sub(r'\s+', ' ', cleaned_answer).strip()
+            # Strip leaked control blocks, but keep the display text formatting
+            # exactly as streamed. TTS cleanup happens before synthesis; UI text
+            # must not collapse newlines or other intentional whitespace.
+            display_answer = _strip_control_leak(final_answer)
+            display_answer = display_answer.replace("\r\n", "\n").replace("\r", "\n")
+            log_preview = " ".join(display_answer.split())
 
             brain = getattr(self.conn_state, "brain", None)
             silenced_completed_exam_turn = False
             if (
-                cleaned_answer
+                display_answer.strip()
                 and brain
                 and control_payload
                 and brain.should_silence_completed_turn(control_payload, forced=forced)
@@ -1429,31 +1425,31 @@ class TranscriptionCallbacks:
                 logger.info(
                     "🖥️🧭 Suppressing spoken assistant text because consuming this question completes the oral exam."
                 )
-                cleaned_answer = ""
+                display_answer = ""
                 silenced_completed_exam_turn = True
 
-            if cleaned_answer: # Ensure it's not empty after cleaning
+            if display_answer.strip(): # Ensure it's not empty after control stripping
                 # Check if response took too long (potential issue)
                 if hasattr(self, 'last_user_speech_time') and self.last_user_speech_time > 0:
                     response_time = time.time() - self.last_user_speech_time
                     if response_time > 10:
                         log_event("⚠️", f"[User {self.user_id}] Slow response ({response_time:.1f}s)", "warning")
                 
-                log_event("✅", f"[User {self.user_id}] Complete (len={len(cleaned_answer)}): \"{cleaned_answer[:100]}{'...' if len(cleaned_answer) > 100 else ''}\"")
+                log_event("✅", f"[User {self.user_id}] Complete (len={len(display_answer)}): \"{log_preview[:100]}{'...' if len(log_preview) > 100 else ''}\"")
                 self.user_speech_received = False  # Reset flag after response
                 self.message_queue.put_nowait({
                     "type": "final_assistant_answer",
-                    "content": cleaned_answer
+                    "content": display_answer
                 })
                 # Use connection-specific conversation history
-                self.conn_state.conversation_history.append(_conversation_message("assistant", cleaned_answer))
+                self.conn_state.conversation_history.append(_conversation_message("assistant", display_answer))
                 # Also update the shared pipeline manager's history
                 self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
                 self.final_assistant_answer_sent = True
-                self.final_assistant_answer = cleaned_answer # Store the sent answer
+                self.final_assistant_answer = display_answer # Store the sent answer
 
                 if brain:
-                    return brain.mark_assistant_turn_delivered(cleaned_answer, control_payload, forced=forced)
+                    return brain.mark_assistant_turn_delivered(display_answer, control_payload, forced=forced)
             else:
                 if silenced_completed_exam_turn:
                     logger.info("🖥️🧭 Silent oral-exam finish applied; no spoken assistant text sent.")

@@ -240,7 +240,7 @@ function useVoiceSocket(serverUrl: string) {
             content:
               payload.type === "assistant_sentence" &&
               !previousContent.includes(payload.content)
-                ? `${previousContent} ${payload.content}`.trim()
+                ? `${previousContent}${payload.content}`
                 : payload.content,
           };
 
