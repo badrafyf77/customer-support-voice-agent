@@ -3,7 +3,7 @@ import logging
 from typing import Optional, Callable
 import numpy as np
 from scipy.signal import resample_poly
-from services.stt import TranscriptionProcessor
+from core.nodes.stt.faster_whisper import FasterWhisperSTTProvider
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class AudioInputProcessor:
             pipeline_latency: Estimated latency of the processing pipeline in seconds.
         """
         self.last_partial_text: Optional[str] = None
-        self.transcriber = TranscriptionProcessor(
+        self.transcriber = FasterWhisperSTTProvider(
             language,
             on_recording_start_callback=self._on_recording_start,
             silence_active_callback=self._silence_active_callback,

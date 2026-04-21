@@ -73,7 +73,7 @@ INT16_MAX_ABS_VALUE: float = 32768.0
 SAMPLE_RATE: int = 16000
 
 
-class TranscriptionProcessor:
+class FasterWhisperSTTProvider:
     """
     Manages audio transcription using RealtimeSTT, handling real-time and final
     transcription callbacks, silence detection, turn detection (optional),
@@ -884,3 +884,6 @@ class TranscriptionProcessor:
             self.silence_active_callback = None
             self.on_recording_start_callback = None
             self.on_tts_allowed_to_synthesize = None
+
+
+TranscriptionProcessor = FasterWhisperSTTProvider

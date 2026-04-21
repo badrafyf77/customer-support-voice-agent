@@ -1,4 +1,4 @@
-# speech_pipeline_manager.py
+"""LLM-to-TTS speech pipeline manager."""
 from typing import Optional, Callable, Any
 import threading
 import logging
@@ -10,10 +10,10 @@ import re
 # (Make sure real/mock imports are correct)
 from core.brain import EXAM_CONTROL_DELIMITER
 from core.colors import Colors
+from core.nodes.tts.realtime import RealtimeTTSProvider
 from core.text_context import TextContext
 from core.text_similarity import TextSimilarity
 from services.llm import LLM
-from services.tts import AudioProcessor
 
 # Matches the intended §CTRL§ delimiter and everything after it
 _CTRL_DELIMITER_RE = re.compile(re.escape(EXAM_CONTROL_DELIMITER) + r'.*$', re.DOTALL)
@@ -197,7 +197,7 @@ class SpeechPipelineManager:
         self.system_prompt = self._build_effective_system_prompt(self.base_system_prompt)
 
         # --- Instance Dependencies ---
-        self.audio = AudioProcessor(
+        self.audio = RealtimeTTSProvider(
             engine=self.tts_engine,
             orpheus_model=self.orpheus_model,
             skip_prewarm=skip_prewarm

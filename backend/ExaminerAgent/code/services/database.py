@@ -1,4 +1,3 @@
-# database.py
 """
 Database module for loading Veridex profiles, exams, attempts, and rubric data from Supabase.
 """

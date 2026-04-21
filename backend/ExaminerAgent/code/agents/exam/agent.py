@@ -23,8 +23,16 @@ from typing import Any, Dict, Literal, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.base import BaseAgent
 from agents.exam.prompts import SystemPromptBuilder
 from core.brain import EXAM_CONTROL_DELIMITER
+from core.models import (
+    AgentResult,
+    SessionContext,
+    conversation_message as _conversation_message,
+    normalize_conversation_history as _normalize_conversation_history,
+    parse_datetime_utc as _parse_datetime_utc,
+)
 from services.database import get_database_client
 
 logger = logging.getLogger(__name__)
@@ -1042,76 +1050,7 @@ class ExamSessionGraphController:
             return None
 
 
-def _parse_datetime_utc(value: Any) -> Optional[datetime]:
-    """Parse best-effort datetime values from DB strings into UTC datetimes."""
-    if value is None:
-        return None
-
-    raw = str(value).strip().strip('"').strip("'")
-    if not raw:
-        return None
-
-    token_match = re.search(
-        r"\d{4}-\d{2}-\d{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?",
-        raw,
-    )
-    candidate = token_match.group(0) if token_match else raw
-
-    if candidate.endswith(("Z", "z")):
-        candidate = candidate[:-1] + "+00:00"
-
-    if re.search(r"[+-][0-9]{4}$", candidate):
-        candidate = f"{candidate[:-5]}{candidate[-5:-2]}:{candidate[-2:]}"
-
-    frac_match = re.search(r"\.([0-9]+)", candidate)
-    if frac_match and len(frac_match.group(1)) > 6:
-        candidate = candidate.replace(frac_match.group(0), "." + frac_match.group(1)[:6], 1)
-
-    parse_attempts = [candidate]
-    if " " in candidate and "T" not in candidate:
-        parse_attempts.append(candidate.replace(" ", "T", 1))
-    if "T" in candidate:
-        parse_attempts.append(candidate.replace("T", " ", 1))
-
-    for attempt in parse_attempts:
-        try:
-            parsed = datetime.fromisoformat(attempt)
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
-        except ValueError:
-            continue
-
-    return None
-
-
-def _conversation_message(role: str, content: str, timestamp: datetime | None = None) -> dict[str, str]:
-    return {
-        "role": role,
-        "content": content,
-        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
-    }
-
-
-def _normalize_conversation_history(history: list | None) -> list[dict[str, str]]:
-    normalized_history: list[dict[str, str]] = []
-
-    for item in list(history or []):
-        if not isinstance(item, dict):
-            continue
-
-        role = str(item.get("role") or "").strip().lower()
-        content = str(item.get("content") or "").strip()
-        if role not in {"user", "assistant", "system"} or not content:
-            continue
-
-        timestamp = _parse_datetime_utc(item.get("timestamp"))
-        normalized_history.append(_conversation_message(role, content, timestamp))
-
-    return normalized_history
-
-
-class ExamAgentBrain:
+class ExamAgentBrain(BaseAgent):
     """Exam-specific brain adapter consumed by the shared streaming session."""
 
     def __init__(self, context: dict[str, Any]):
@@ -1162,6 +1101,11 @@ class ExamAgentBrain:
             "questions_answered": getattr(controller, "questions_answered", 0),
         }
 
+    def build_graph(self) -> Any | None:
+        if not self.controller:
+            return None
+        return getattr(ExamSessionGraphController, "_PLANNING_GRAPH", None)
+
     @property
     def has_pending_student_turn(self) -> bool:
         return bool(self.controller and self.controller.has_pending_student_turn)
@@ -1204,6 +1148,22 @@ class ExamAgentBrain:
         if not self.controller:
             return None
         return self.controller.mark_assistant_turn_delivered(spoken_text, control_payload, forced=forced)
+
+    async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
+        if text:
+            self.queue_student_turn(text)
+
+        planned_turn = None
+        if self.has_pending_student_turn:
+            planned_turn = self.plan_student_turn_response(session.conversation_history)
+
+        if not planned_turn:
+            planned_turn = self.plan_next_turn(session.conversation_history)
+
+        if not planned_turn and session.metadata.get("reason") == "session_ready":
+            planned_turn = self.plan_resume_turn(session.conversation_history)
+
+        return AgentResult.from_planned_turn(planned_turn)
 
     async def finish_session(self, conn_state: Any, message_queue: Any, reason: str) -> None:
         if conn_state.session_finished:

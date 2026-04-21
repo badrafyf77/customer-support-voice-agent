@@ -65,7 +65,7 @@ def ensure_lasinya_models(models_root: str = "models", model_name: str = "Lasiny
                 local_dir=base
             )
 
-class AudioProcessor:
+class RealtimeTTSProvider:
     """
     Manages Text-to-Speech (TTS) synthesis using various engines via RealtimeTTS.
 
@@ -647,3 +647,6 @@ class AudioProcessor:
         logger.info(f"👄 synthesize FINAL finished completed={not stop_event.is_set()}")
         logger.info(f"👄✅ {generation_string} Final answer synthesis complete.")
         return True # Indicate successful completion
+
+
+AudioProcessor = RealtimeTTSProvider

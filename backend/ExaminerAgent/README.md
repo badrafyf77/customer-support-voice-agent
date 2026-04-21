@@ -36,13 +36,18 @@ Student audio
 ### Main components
 
 - `code/server.py`: FastAPI app, WebSocket session lifecycle, exam finish flow
-- `code/audio_in.py`: audio ingestion and STT feed pipeline
-- `code/transcribe.py`: transcription processor
-- `code/speech_pipeline_manager.py`: LLM + TTS orchestration
-- `code/exam_graph.py`: LangGraph exam controller for question pacing and automatic closing
-- `code/user_context.py`: personalized examiner system prompt builder
-- `code/database.py`: Supabase exam/profile/attempt access
-- `code/voice_runtime_pool.py`: warmed runtime pooling for concurrency management
+- `code/core/session.py`: WebSocket session lifecycle
+- `code/core/models.py`: shared session and agent result models
+- `code/core/transport/websocket.py`: audio ingestion and STT feed pipeline
+- `code/core/nodes/`: STT/TTS runtime nodes
+- `code/core/pipeline.py`: LLM + TTS orchestration
+- `code/agents/base.py`: stable `BaseAgent.run_turn(...)` runtime contract
+- `code/agents/exam/agent.py`: LangGraph exam controller for question pacing and automatic closing
+- `code/agents/exam/prompts.py`: personalized examiner system prompt builder
+- `code/services/database.py`: Supabase exam/profile/attempt access
+- `code/services/llm.py`: LLM provider access
+- `code/core/voice_runtime_pool.py`: warmed runtime pooling for concurrency management
+- `code/config/global.yaml`: shared config defaults merged with per-agent config
 
 ## How It Works In Veridex
 

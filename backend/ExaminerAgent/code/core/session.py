@@ -1,4 +1,4 @@
-# session.py
+"""WebSocket session lifecycle for the voice agent."""
 from queue import Empty
 import logging
 from core.logsetup import setup_logging
@@ -16,7 +16,7 @@ def log_event(emoji: str, message: str, level: str = "info"):
         logger.error(f"{emoji} {message}")
 
 from core.upsample_overlap import UpsampleOverlap
-from datetime import datetime, timezone
+from datetime import datetime
 from core.colors import Colors
 import asyncio
 import struct
@@ -29,7 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import urlopen
 
-from typing import Any, Optional # Added for type hints in docstrings
+from typing import Any
 from contextlib import asynccontextmanager
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -41,6 +41,8 @@ from core.config import (
     read_float_env,
     read_int_env,
 )
+from core.models import AgentResult, SessionContext
+from core.models import conversation_message as _conversation_message
 from core.voice_runtime_pool import VoiceRuntimeCapacityError, VoiceRuntimeManager
 
 
@@ -60,54 +62,6 @@ def _read_int_env(name: str, default: int) -> int:
 
 def _read_float_env(name: str, default: float) -> float:
     return read_float_env(name, default)
-
-
-def _parse_datetime_utc(value: Any) -> Optional[datetime]:
-    """
-    Parse best-effort datetime values from DB strings and return UTC-aware datetimes.
-    """
-    if value is None:
-        return None
-
-    raw = str(value).strip().strip('"').strip("'")
-    if not raw:
-        return None
-
-    # If the value is embedded in surrounding text, extract the first ISO-like token.
-    token_match = re.search(
-        r"\d{4}-\d{2}-\d{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?",
-        raw,
-    )
-    candidate = token_match.group(0) if token_match else raw
-
-    if candidate.endswith(("Z", "z")):
-        candidate = candidate[:-1] + "+00:00"
-
-    # Normalize offsets like +0000 to +00:00 for fromisoformat.
-    if re.search(r"[+-][0-9]{4}$", candidate):
-        candidate = f"{candidate[:-5]}{candidate[-5:-2]}:{candidate[-2:]}"
-
-    # Trim excessive fractional precision to microseconds.
-    frac_match = re.search(r"\.([0-9]+)", candidate)
-    if frac_match and len(frac_match.group(1)) > 6:
-        candidate = candidate.replace(frac_match.group(0), "." + frac_match.group(1)[:6], 1)
-
-    parse_attempts = [candidate]
-    if " " in candidate and "T" not in candidate:
-        parse_attempts.append(candidate.replace(" ", "T", 1))
-    if "T" in candidate:
-        parse_attempts.append(candidate.replace("T", " ", 1))
-
-    for attempt in parse_attempts:
-        try:
-            parsed = datetime.fromisoformat(attempt)
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
-        except ValueError:
-            continue
-
-    return None
 
 
 _load_env_file_if_available()
@@ -287,7 +241,7 @@ async def lifespan(app):
 
     # Apply STT model config before warmed runtimes create their transcribers.
     try:
-        from services import stt
+        from core.nodes.stt import faster_whisper as stt
 
         stt_model = agent_config.get("stt_model") or stt.DEFAULT_RECORDER_CONFIG.get("model")
         stt_realtime_model = agent_config.get("stt_realtime_model") or stt_model
@@ -392,30 +346,35 @@ def format_timestamp_ns(timestamp_ns: int) -> str:
     return formatted_timestamp
 
 
-def _conversation_message(role: str, content: str, timestamp: datetime | None = None) -> dict[str, str]:
-    return {
-        "role": role,
-        "content": content,
-        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
-    }
+def _build_session_context(conn_state, reason: str) -> SessionContext:
+    return SessionContext(
+        session_id=str(id(conn_state)),
+        agent_name=getattr(conn_state, "agent_name", "exam"),
+        user_id=getattr(conn_state, "user_id", None),
+        exam_id=getattr(conn_state, "exam_id", None),
+        attempt_id=getattr(conn_state, "attempt_id", None),
+        conversation_history=list(getattr(conn_state, "conversation_history", []) or []),
+        call_state={
+            "session_finished": getattr(conn_state, "session_finished", False),
+            "finish_in_progress": getattr(conn_state, "finish_in_progress", False),
+            "microphone_locked": getattr(conn_state, "lock_microphone_until_finish", False),
+        },
+        metadata={"reason": reason},
+    )
 
 
-def _normalize_conversation_history(history: list | None) -> list[dict[str, str]]:
-    normalized_history: list[dict[str, str]] = []
+async def _run_agent_turn(brain: Any, conn_state: Any, reason: str) -> AgentResult:
+    if hasattr(brain, "run_turn"):
+        return await brain.run_turn("", _build_session_context(conn_state, reason))
 
-    for item in list(history or []):
-        if not isinstance(item, dict):
-            continue
-
-        role = str(item.get("role") or "").strip().lower()
-        content = str(item.get("content") or "").strip()
-        if role not in {"user", "assistant", "system"} or not content:
-            continue
-
-        timestamp = _parse_datetime_utc(item.get("timestamp"))
-        normalized_history.append(_conversation_message(role, content, timestamp))
-
-    return normalized_history
+    planned_turn = None
+    if getattr(brain, "has_pending_student_turn", False):
+        planned_turn = brain.plan_student_turn_response(conn_state.conversation_history)
+    if not planned_turn:
+        planned_turn = brain.plan_next_turn(conn_state.conversation_history)
+    if not planned_turn and reason == "session_ready":
+        planned_turn = brain.plan_resume_turn(conn_state.conversation_history)
+    return AgentResult.from_planned_turn(planned_turn)
 
 
 async def trigger_orchestrated_exam_turn(
@@ -438,31 +397,24 @@ async def trigger_orchestrated_exam_turn(
         logger.info("🧭 Skipping orchestrated turn trigger because generation is already active (%s).", reason)
         return False
 
-    planned_turn = None
-    if brain.has_pending_student_turn:
-        try:
-            planned_turn = brain.plan_student_turn_response(conn_state.conversation_history)
-        except Exception as exc:
-            logger.exception("🧭 Failed to build the student-turn agent response: %s", exc)
-            return False
+    try:
+        agent_result = await _run_agent_turn(brain, conn_state, reason)
+    except Exception as exc:
+        logger.exception("🧭 Failed to build the agent turn: %s", exc)
+        return False
 
-    if not planned_turn:
-        planned_turn = brain.plan_next_turn(conn_state.conversation_history)
-    if not planned_turn and reason == "session_ready":
-        planned_turn = brain.plan_resume_turn(conn_state.conversation_history)
-
-    if not planned_turn:
+    if agent_result.is_empty:
         logger.info("🧭 No orchestrated exam turn to trigger (%s).", reason)
         return False
 
     logger.info(
         "🧭 Triggering orchestrated exam turn (%s): kind=%s question=%s",
         reason,
-        planned_turn.kind,
-        planned_turn.question_number,
+        agent_result.kind,
+        agent_result.question_number,
     )
 
-    if planned_turn.should_auto_finish:
+    if agent_result.should_auto_finish or agent_result.action == "finish":
         logger.info("🧭 Agent decided the session is complete. Finishing silently without another spoken turn.")
         await trigger_exam_finish(
             conn_state,
@@ -475,12 +427,12 @@ async def trigger_orchestrated_exam_turn(
         )
         return True
 
-    callbacks.prepare_assistant_turn(keep_microphone_blocked=planned_turn.should_auto_finish)
+    callbacks.prepare_assistant_turn(keep_microphone_blocked=agent_result.should_auto_finish)
     conn_state.pipeline_manager.history = conn_state.conversation_history
     conn_state.pipeline_manager.prepare_generation(
-        planned_turn.control_prompt,
-        expects_control_block=planned_turn.expects_control_block,
-        history_override=planned_turn.history_override,
+        agent_result.text,
+        expects_control_block=agent_result.expects_control_block,
+        history_override=agent_result.history_override,
     )
     return True
 
@@ -1645,6 +1597,7 @@ async def run_session(
             self.finish_in_progress = False
             self.lock_microphone_until_finish = False
             self.brain = brain
+            self.agent_name = config.get("agent_name", "exam")
             self.user_id = user_id
             self.exam_id = exam_id
             self.attempt_id = attempt_id

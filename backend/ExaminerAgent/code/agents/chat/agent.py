@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
+from agents.base import BaseAgent
+from core.models import AgentResult, SessionContext
+
 
 SYSTEM_PROMPT = """
 You are a helpful, concise voice assistant.
@@ -27,7 +30,7 @@ class PlannedChatTurn:
     should_auto_finish: bool = False
 
 
-class ChatAgentBrain:
+class ChatAgentBrain(BaseAgent):
     """Minimal brain adapter consumed by the shared streaming session."""
 
     system_prompt = SYSTEM_PROMPT
@@ -95,6 +98,13 @@ class ChatAgentBrain:
 
     async def save_progress(self, conn_state: Any) -> None:
         return None
+
+    async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
+        if text:
+            self.queue_student_turn(text)
+
+        planned_turn = self.plan_student_turn_response(session.conversation_history)
+        return AgentResult.from_planned_turn(planned_turn)
 
 
 def build_chat_agent(context: dict[str, Any] | None = None) -> tuple[ChatAgentBrain, dict[str, Any]]:

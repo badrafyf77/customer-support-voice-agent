@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - startup will fail loudly if YAML is ne
 logger = logging.getLogger(__name__)
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_ROOT = CODE_ROOT / "config"
 
 
 def load_env_file_if_available() -> None:
@@ -81,8 +82,28 @@ def expand_env_placeholders(value: Any) -> Any:
     return value
 
 
-def load_agent_config(agent_name: str) -> dict[str, Any]:
-    config_path = CODE_ROOT / "agents" / agent_name / "config.yaml"
+def _parse_scalar(value: str) -> Any:
+    normalized = value.strip()
+    if normalized == "":
+        return None
+    if normalized.lower() in {"true", "false"}:
+        return normalized.lower() == "true"
+    if normalized.lower() in {"none", "null"}:
+        return None
+    try:
+        return int(normalized)
+    except ValueError:
+        pass
+    try:
+        return float(normalized)
+    except ValueError:
+        return normalized
+
+
+def _load_yaml_file(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        return {}
+
     with config_path.open("r", encoding="utf-8") as f:
         if yaml is not None:
             return expand_env_placeholders(yaml.safe_load(f) or {})
@@ -99,5 +120,35 @@ def load_agent_config(agent_name: str) -> dict[str, Any]:
             elif value.lower() in {"true", "false"}:
                 parsed[key.strip()] = value.lower() == "true"
             else:
-                parsed[key.strip()] = value
+                parsed[key.strip()] = _parse_scalar(value)
         return expand_env_placeholders(parsed)
+
+
+def _merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _apply_env_overrides(config: dict[str, Any], agent_name: str) -> dict[str, Any]:
+    merged = dict(config)
+    agent_prefix = agent_name.upper().replace("-", "_")
+
+    for key in list(merged.keys()):
+        env_suffix = key.upper().replace("-", "_")
+        for env_name in (f"VOICE_AGENT_{env_suffix}", f"{agent_prefix}_{env_suffix}"):
+            if env_name in os.environ:
+                merged[key] = _parse_scalar(os.environ[env_name])
+
+    return merged
+
+
+def load_agent_config(agent_name: str) -> dict[str, Any]:
+    global_config = _load_yaml_file(CONFIG_ROOT / "global.yaml")
+    agent_config = _load_yaml_file(CODE_ROOT / "agents" / agent_name / "config.yaml")
+    merged = _merge_config(global_config, agent_config)
+    return _apply_env_overrides(merged, agent_name)

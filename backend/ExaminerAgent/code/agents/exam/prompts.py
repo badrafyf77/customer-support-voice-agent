@@ -1,4 +1,3 @@
-# user_context.py
 """
 Module for building personalized system prompts for Veridex oral exams.
 """

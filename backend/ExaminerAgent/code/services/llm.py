@@ -47,7 +47,7 @@ try:
 
         load_dotenv()
 except Exception:
-    logger.debug("🤖⚙️ Skipping optional .env load in llm_module.", exc_info=False)
+    logger.debug("🤖⚙️ Skipping optional .env load in services.llm.", exc_info=False)
 
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

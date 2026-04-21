@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Protocol
 
+from core.models import AgentResult, SessionContext
+
 EXAM_CONTROL_DELIMITER = "§CTRL§"
 
 
@@ -30,6 +32,10 @@ class AgentBrain:
             self._current_task.cancel()
         self._current_task = asyncio.create_task(self._run(text))
         return await self._current_task
+
+    async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
+        reply = await self.handle_transcript(text)
+        return AgentResult(text=reply, kind="graph", action="respond")
 
     async def _run(self, text: str) -> str:
         result = await self.graph.ainvoke({**self.state, "user_input": text})
@@ -67,6 +73,9 @@ class StreamingSessionBrain(Protocol):
     def plan_student_turn_response(self, conversation_history: list[dict[str, str]] | None = None) -> PlannedAgentTurn | None:
         ...
 
+    async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
+        ...
+
     def should_silence_completed_turn(self, control_payload: Any, *, forced: bool = False) -> bool:
         ...
 
@@ -84,4 +93,3 @@ class StreamingSessionBrain(Protocol):
 
     async def save_progress(self, conn_state: Any) -> None:
         ...
-
