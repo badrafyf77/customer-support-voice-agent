@@ -1,14 +1,11 @@
 # Voice Agent Backend
 
 FastAPI backend for realtime voice-agent sessions. It receives microphone audio
-over WebSocket, transcribes speech, runs an agent turn, streams TTS audio back to
-the client, and optionally persists oral-exam progress to Supabase.
+over WebSocket, transcribes speech, runs the selected agent, streams TTS audio
+back to the client, and exposes a few support endpoints.
 
-The backend supports two runtime modes:
-
-- **Exam mode**: `/ws?user_id=...&exam_id=...&attempt_id=...` loads Supabase
-  context and runs the LangGraph-backed oral exam agent.
-- **Chat mode**: `/ws` without exam query params runs a simple voice chat agent.
+This README stays project-level and agent-neutral. Agent-specific behavior lives
+inside each folder under [`code/agents`](./code/agents).
 
 ## Runtime Flow
 
@@ -31,12 +28,12 @@ For the detailed file-by-file map, see [`code/ARCHITECTURE.md`](./code/ARCHITECT
 
 ```text
 code/
-├── server.py                    # FastAPI app and HTTP/WebSocket routes
+├── server.py                    # FastAPI app and agent selection
 ├── config/global.yaml           # shared defaults
 ├── agents/
 │   ├── base.py                  # BaseAgent.run_turn(...) contract
-│   ├── chat/agent.py            # simple voice chat agent
-│   └── exam/                    # oral exam agent, prompts, config
+│   ├── chat/                    # simple chat agent
+│   └── exam/                    # oral exam agent
 ├── core/
 │   ├── session.py               # WebSocket session lifecycle
 │   ├── pipeline.py              # LLM -> TTS orchestration
@@ -76,23 +73,47 @@ curl http://localhost:8080/
 The first build/start can take a while because Docker downloads Python
 dependencies and model assets.
 
-## Prerequisites For Docker
+## Agent Selection
 
-- Docker Engine and Docker Compose plugin
-- NVIDIA GPU drivers if using the default vLLM stack
-- NVIDIA Container Toolkit for GPU access inside containers
+All voice sessions use the same WebSocket endpoint:
 
-The compose stack uses named volumes for Hugging Face and Torch caches:
+```text
+/ws
+```
 
-- `huggingface_cache`
-- `torch_cache`
+Current selection logic lives in [`code/server.py`](./code/server.py):
 
-## Compose Files
-
-| File | Purpose |
+| Connection | Agent |
 | --- | --- |
-| `docker-compose.yml` | Recommended backend + vLLM stack, with healthcheck and runtime pool env vars. |
-| `docker-compose.vllm.yml` | Older vLLM compose variant kept for reference. |
+| `/ws` with no exam query params | `chat` |
+| `/ws?user_id=...&exam_id=...&attempt_id=...` | `exam` |
+
+The selected agent is built in `server.py`, then passed into
+`core/session.py::run_session(...)`. The session and pipeline only depend on the
+shared `BaseAgent.run_turn(...)` interface.
+
+To change which agent runs:
+
+1. Edit the branch in `code/server.py::ws_endpoint`.
+2. Import the target agent builder, for example `build_chat_agent` or
+   `build_exam_agent`.
+3. Load the matching config with `load_agent_config("<agent_name>")`.
+4. Pass the built agent and config to `run_session(...)`.
+
+To add a new agent:
+
+1. Create `code/agents/<name>/`.
+2. Add `agent.py`, `config.yaml`, and `README.md`.
+3. Implement a builder that returns `(BaseAgent, initial_state)`.
+4. Keep prompts, tools, and agent-only helpers inside that folder.
+5. Register the agent selection branch in `code/server.py`.
+
+## Existing Agents
+
+| Agent | Folder | Purpose |
+| --- | --- | --- |
+| `chat` | [`code/agents/chat`](./code/agents/chat) | General conversational voice assistant. |
+| `exam` | [`code/agents/exam`](./code/agents/exam) | Oral exam flow backed by exam context. |
 
 ## Configuration
 
@@ -109,11 +130,11 @@ Common variables:
 | `STT_MODEL` | Main faster-whisper model, default `medium.en`. |
 | `STT_REALTIME_MODEL` | Optional realtime model when not sharing the main STT model. |
 | `STT_USE_MAIN_MODEL_FOR_REALTIME` | Use one STT model for both realtime and final transcription. |
-| `TURN_DETECTION_DEVICE` | Device for turn-detection model, usually `cpu` or `cuda`. |
+| `TURN_DETECTION_DEVICE` | Device for turn detection, usually `cpu` or `cuda`. |
 | `VOICE_RUNTIME_MIN_WARM` | Number of warmed voice runtimes to keep ready. |
 | `VOICE_RUNTIME_MAX_CONCURRENT` | Maximum concurrent voice sessions. |
-| `SUPABASE_URL` | Required for exam sessions. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Required for exam sessions. |
+| `SUPABASE_URL` | Required only by agents that load Supabase context. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required only by agents that load Supabase context. |
 
 Agent config is layered:
 
@@ -142,16 +163,7 @@ Form fields:
 
 ### `WS /ws`
 
-Runs a voice session.
-
-Query params:
-
-- `user_id`
-- `exam_id`
-- `attempt_id`
-
-When any of those params are present, the backend loads exam context and runs the
-exam agent. Without them, it runs the chat agent.
+Runs a voice session with the selected agent.
 
 ## Local Development Without Docker
 
@@ -186,10 +198,10 @@ NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
 
 See [`../frontend/README.md`](../frontend/README.md).
 
-## Notes
+## Boundaries
 
-- STT and TTS runtime logic live under `code/core/nodes/`, not `services/`.
-- `services/` is for external integrations such as Supabase, LLM API access, and
+- `core/` owns runtime flow: session, transport, pipeline, STT/TTS nodes.
+- `agents/` owns agent behavior, prompts, tools, and per-agent config.
+- `services/` owns external integrations such as Supabase, LLM API access, and
   voice verification.
-- Oral-attempt evaluation is not triggered here; this backend submits/saves the
-  oral attempt and another system should handle evaluation.
+- Provider-specific STT/TTS logic belongs in `core/nodes/`, not `services/`.

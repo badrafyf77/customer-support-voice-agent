@@ -1,0 +1,41 @@
+# Agents
+
+Agents decide what the assistant should say next. The shared voice runtime does
+not know whether an agent is a chat bot, an oral exam controller, or something
+else; it only calls `BaseAgent.run_turn(...)`.
+
+## Contract
+
+Each agent should expose a builder from its `agent.py` file:
+
+```python
+def build_<name>_agent(context: dict) -> tuple[BaseAgent, dict]:
+    ...
+```
+
+The returned `BaseAgent` must implement:
+
+```python
+async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
+    ...
+```
+
+## Current Agents
+
+| Agent | Folder | Purpose |
+| --- | --- | --- |
+| `chat` | [`chat`](./chat) | General conversational voice assistant. |
+| `exam` | [`exam`](./exam) | Oral exam controller with exam context and progress tracking. |
+
+## Adding Or Changing Agents
+
+Keep agent-specific behavior in the agent folder:
+
+- `agent.py` for orchestration
+- `config.yaml` for per-agent settings
+- `prompts.py` or `system_prompt.txt` for prompts
+- `tools.py` for tools used only by that agent
+- `README.md` for agent-specific setup and behavior notes
+
+Register agent selection in [`../server.py`](../server.py). The current backend
+uses `/ws` for `chat` and exam query params for `exam`.
