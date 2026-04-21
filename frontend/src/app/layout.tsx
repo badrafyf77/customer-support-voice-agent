@@ -1,25 +1,16 @@
-import '../styles/globals.css';
-import '../styles/layout.css';
-import { ReactNode } from 'react';
 import type { Metadata } from 'next';
-import { Toaster } from '@/components/ui/toaster';
+import type { ReactNode } from 'react';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Veridex',
-  description: 'Run oral and written exams with realtime AI voice assessment, transcripts, and rubric-based feedback.',
+  title: 'Oral Exam Voice Agent',
+  description: 'One-page oral exam voice-agent console.',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" className={'min-h-full dark scroll-smooth'}>
-      <body className="min-h-full">
-        {children}
-        <Toaster />
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }

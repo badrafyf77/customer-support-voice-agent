@@ -1,5 +1,725 @@
-import { HomePage } from '@/components/home/home-page';
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+const DEFAULT_EXAM_SERVER_URL = 'http://localhost:8000';
+const SERVER_READY_TIMEOUT_MS = 60_000;
+const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
+const AUDIO_BATCH_SAMPLES = 2048;
+const AUDIO_HEADER_BYTES = 8;
+const AUDIO_MESSAGE_BYTES = AUDIO_HEADER_BYTES + AUDIO_BATCH_SAMPLES * 2;
+
+type TranscriptMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  type: 'partial' | 'final';
+  finishComplete?: boolean;
+  success?: boolean;
+  error?: string;
+};
+
+type WebSocketPayload = {
+  type: string;
+  status?: string;
+  message?: string;
+  content?: string;
+  success?: boolean;
+  error?: string;
+};
+
+type WebSocketOptions = {
+  userId?: string;
+  examId?: string;
+  attemptId?: string;
+};
+
+function normalizeServerUrl(value: string) {
+  const trimmedValue = value.trim() || DEFAULT_EXAM_SERVER_URL;
+  return /^https?:\/\//i.test(trimmedValue) ? trimmedValue : `http://${trimmedValue}`;
+}
+
+function buildWebSocketUrl(serverUrl: string, options: WebSocketOptions) {
+  const url = new URL('/ws', normalizeServerUrl(serverUrl).replace(/^http/i, 'ws'));
+
+  if (options.userId) {
+    url.searchParams.set('user_id', options.userId);
+  }
+
+  if (options.examId) {
+    url.searchParams.set('exam_id', options.examId);
+  }
+
+  if (options.attemptId) {
+    url.searchParams.set('attempt_id', options.attemptId);
+  }
+
+  return url.toString();
+}
+
+function base64ToInt16Array(value: string) {
+  const rawValue = atob(value);
+  const bytes = new Uint8Array(rawValue.length);
+
+  for (let index = 0; index < rawValue.length; index += 1) {
+    bytes[index] = rawValue.charCodeAt(index);
+  }
+
+  return new Int16Array(bytes.buffer);
+}
+
+function createTranscriptMessage(
+  role: TranscriptMessage['role'],
+  content: string,
+  type: TranscriptMessage['type'],
+): TranscriptMessage {
+  return {
+    id: `${role}-${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    role,
+    content,
+    type,
+  };
+}
+
+function upsertUserMessage(
+  previousMessages: TranscriptMessage[],
+  content: string,
+  type: TranscriptMessage['type'],
+) {
+  if (!content.trim()) {
+    return previousMessages;
+  }
+
+  const lastUserIndex = previousMessages.findLastIndex((message) => message.role === 'user');
+  const nextMessage = createTranscriptMessage('user', content, type);
+
+  if (lastUserIndex === -1 || previousMessages[lastUserIndex].type !== 'partial') {
+    return [...previousMessages, nextMessage];
+  }
+
+  const updatedMessages = [...previousMessages];
+  updatedMessages[lastUserIndex] = nextMessage;
+  return updatedMessages;
+}
+
+function waitForReady(isReadyRef: { current: boolean }) {
+  return new Promise<void>((resolve, reject) => {
+    const startedAt = Date.now();
+
+    const check = () => {
+      if (isReadyRef.current) {
+        resolve();
+        return;
+      }
+
+      if (Date.now() - startedAt >= SERVER_READY_TIMEOUT_MS) {
+        reject(new Error('The voice agent server did not become ready in time.'));
+        return;
+      }
+
+      window.setTimeout(check, 100);
+    };
+
+    check();
+  });
+}
+
+function useVoiceSocket(serverUrl: string, options: WebSocketOptions) {
+  const [isConnected, setIsConnected] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [serverStatus, setServerStatus] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [messages, setMessages] = useState<TranscriptMessage[]>([]);
+  const [isTtsPlaying, setIsTtsPlaying] = useState(false);
+
+  const socketRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const ttsWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const connectionPromiseRef = useRef<Promise<void> | null>(null);
+
+  const initializeAudioPlayback = useCallback(async () => {
+    if (audioContextRef.current && ttsWorkletNodeRef.current) {
+      return;
+    }
+
+    const audioContext = new AudioContext({ sampleRate: 24_000 });
+    await audioContext.audioWorklet.addModule('/static/ttsPlaybackProcessor.js');
+    await audioContext.resume();
+
+    const ttsWorkletNode = new AudioWorkletNode(audioContext, 'tts-playback-processor');
+    ttsWorkletNode.port.onmessage = ({ data }) => {
+      if (data.type === 'ttsPlaybackStarted') {
+        setIsTtsPlaying(true);
+        socketRef.current?.send(JSON.stringify({ type: 'tts_start' }));
+      }
+
+      if (data.type === 'ttsPlaybackStopped') {
+        setIsTtsPlaying(false);
+        socketRef.current?.send(JSON.stringify({ type: 'tts_stop' }));
+      }
+    };
+
+    ttsWorkletNode.connect(audioContext.destination);
+    audioContextRef.current = audioContext;
+    ttsWorkletNodeRef.current = ttsWorkletNode;
+  }, []);
+
+  const disconnect = useCallback(() => {
+    connectionPromiseRef.current = null;
+
+    socketRef.current?.close();
+    socketRef.current = null;
+
+    ttsWorkletNodeRef.current?.disconnect();
+    ttsWorkletNodeRef.current = null;
+
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+
+    setIsConnected(false);
+    setIsReady(false);
+    setServerStatus('');
+    setStatusMessage('');
+    setIsTtsPlaying(false);
+  }, []);
+
+  const handleJsonMessage = useCallback((payload: WebSocketPayload) => {
+    switch (payload.type) {
+      case 'status':
+        setServerStatus(payload.status || '');
+        setStatusMessage(payload.message || '');
+        setIsReady(payload.status === 'ready');
+        break;
+
+      case 'partial_user_request':
+        setMessages((previousMessages) =>
+          payload.content ? upsertUserMessage(previousMessages, payload.content, 'partial') : previousMessages,
+        );
+        break;
+
+      case 'final_user_request':
+        setMessages((previousMessages) =>
+          payload.content ? upsertUserMessage(previousMessages, payload.content, 'final') : previousMessages,
+        );
+        break;
+
+      case 'assistant_partial':
+      case 'partial_assistant_answer':
+      case 'assistant_sentence':
+        setMessages((previousMessages) => {
+          if (!payload.content?.trim()) {
+            return previousMessages;
+          }
+
+          const lastAssistantIndex = previousMessages.findLastIndex(
+            (message) => message.role === 'assistant' && message.type === 'partial',
+          );
+
+          if (lastAssistantIndex === -1) {
+            return [...previousMessages, createTranscriptMessage('assistant', payload.content, 'partial')];
+          }
+
+          const updatedMessages = [...previousMessages];
+          const previousContent = updatedMessages[lastAssistantIndex].content;
+          updatedMessages[lastAssistantIndex] = {
+            ...updatedMessages[lastAssistantIndex],
+            content:
+              payload.type === 'assistant_sentence' && !previousContent.includes(payload.content)
+                ? `${previousContent} ${payload.content}`.trim()
+                : payload.content,
+          };
+
+          return updatedMessages;
+        });
+        break;
+
+      case 'final_assistant_answer':
+        setMessages((previousMessages) => {
+          if (!payload.content?.trim()) {
+            return previousMessages;
+          }
+
+          const lastAssistantIndex = previousMessages.findLastIndex(
+            (message) => message.role === 'assistant' && message.type === 'partial',
+          );
+
+          if (lastAssistantIndex === -1) {
+            return [...previousMessages, createTranscriptMessage('assistant', payload.content, 'final')];
+          }
+
+          const updatedMessages = [...previousMessages];
+          updatedMessages[lastAssistantIndex] = {
+            ...updatedMessages[lastAssistantIndex],
+            content: payload.content,
+            type: 'final',
+          };
+          return updatedMessages;
+        });
+        break;
+
+      case 'tts_chunk':
+        if (ttsWorkletNodeRef.current && payload.content) {
+          ttsWorkletNodeRef.current.port.postMessage(base64ToInt16Array(payload.content));
+        }
+        break;
+
+      case 'tts_interruption':
+      case 'stop_tts':
+        ttsWorkletNodeRef.current?.port.postMessage({ type: 'clear' });
+        setIsTtsPlaying(false);
+        break;
+
+      case 'finish_complete':
+        setMessages((previousMessages) => [
+          ...previousMessages,
+          {
+            ...createTranscriptMessage('assistant', payload.error || 'Oral exam completed.', 'final'),
+            finishComplete: true,
+            success: payload.success,
+            error: payload.error,
+          },
+        ]);
+        break;
+
+      default:
+        break;
+    }
+  }, []);
+
+  const connect = useCallback(async () => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    if (connectionPromiseRef.current) {
+      return connectionPromiseRef.current;
+    }
+
+    await initializeAudioPlayback();
+
+    connectionPromiseRef.current = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocket(buildWebSocketUrl(serverUrl, options));
+
+      const timeoutId = window.setTimeout(() => {
+        socket.close();
+        rejectOnce(new Error('Timed out while connecting to the oral exam server.'));
+      }, SOCKET_CONNECT_TIMEOUT_MS);
+
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        connectionPromiseRef.current = null;
+      };
+
+      const resolveOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const rejectOnce = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      socket.onopen = () => {
+        setIsConnected(true);
+        setIsReady(false);
+        setStatusMessage('Connecting...');
+        resolveOnce();
+      };
+
+      socket.onmessage = (event) => {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+
+        try {
+          handleJsonMessage(JSON.parse(event.data) as WebSocketPayload);
+        } catch (error) {
+          console.error('Error parsing voice-agent socket message:', error);
+        }
+      };
+
+      socket.onclose = () => {
+        setIsConnected(false);
+        setIsReady(false);
+        setStatusMessage('');
+
+        if (!settled) {
+          rejectOnce(new Error('The oral exam server closed the connection.'));
+        }
+      };
+
+      socket.onerror = () => {
+        setIsConnected(false);
+        rejectOnce(new Error('Unable to connect to the oral exam server.'));
+      };
+
+      socketRef.current = socket;
+    });
+
+    return connectionPromiseRef.current;
+  }, [handleJsonMessage, initializeAudioPlayback, options, serverUrl]);
+
+  const sendAudioData = useCallback((audioBuffer: ArrayBuffer) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(audioBuffer);
+    }
+  }, []);
+
+  const sendMessage = useCallback((message: Record<string, unknown>) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message));
+    }
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    setMessages([]);
+    sendMessage({ type: 'clear_history' });
+  }, [sendMessage]);
+
+  const stopTts = useCallback(() => {
+    ttsWorkletNodeRef.current?.port.postMessage({ type: 'clear' });
+    setIsTtsPlaying(false);
+  }, []);
+
+  useEffect(() => disconnect, [disconnect]);
+
+  return {
+    isConnected,
+    isReady,
+    serverStatus,
+    statusMessage,
+    messages,
+    connect,
+    disconnect,
+    clearHistory,
+    sendAudioData,
+    sendMessage,
+    stopTts,
+    isTtsPlaying,
+  };
+}
+
+function useAudioCapture(onAudioData: (data: ArrayBuffer) => void, getTtsPlayingState: () => boolean) {
+  const [isCapturing, setIsCapturing] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const batchBufferRef = useRef<ArrayBuffer | null>(null);
+  const batchViewRef = useRef<DataView | null>(null);
+  const batchInt16Ref = useRef<Int16Array | null>(null);
+  const batchOffsetRef = useRef(0);
+  const bufferPoolRef = useRef<ArrayBuffer[]>([]);
+
+  const initializeBatch = useCallback(() => {
+    if (batchBufferRef.current) {
+      return;
+    }
+
+    batchBufferRef.current = bufferPoolRef.current.pop() || new ArrayBuffer(AUDIO_MESSAGE_BYTES);
+    batchViewRef.current = new DataView(batchBufferRef.current);
+    batchInt16Ref.current = new Int16Array(batchBufferRef.current, AUDIO_HEADER_BYTES);
+    batchOffsetRef.current = 0;
+  }, []);
+
+  const flushBatch = useCallback(() => {
+    if (!batchViewRef.current || !batchBufferRef.current) {
+      return;
+    }
+
+    const buffer = batchBufferRef.current;
+    batchViewRef.current.setUint32(0, Date.now() & 0xffffffff, false);
+    batchViewRef.current.setUint32(4, getTtsPlayingState() ? 1 : 0, false);
+    onAudioData(buffer);
+
+    bufferPoolRef.current.push(buffer);
+    batchBufferRef.current = null;
+    batchViewRef.current = null;
+    batchInt16Ref.current = null;
+    batchOffsetRef.current = 0;
+  }, [getTtsPlayingState, onAudioData]);
+
+  const flushRemainder = useCallback(() => {
+    if (batchOffsetRef.current === 0 || !batchInt16Ref.current) {
+      return;
+    }
+
+    for (let index = batchOffsetRef.current; index < AUDIO_BATCH_SAMPLES; index += 1) {
+      batchInt16Ref.current[index] = 0;
+    }
+
+    flushBatch();
+  }, [flushBatch]);
+
+  const startCapture = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: { ideal: 48_000 },
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+
+    streamRef.current = stream;
+
+    const audioContext = new AudioContext({ sampleRate: 48_000 });
+    await audioContext.audioWorklet.addModule('/static/pcmWorkletProcessor.js');
+    await audioContext.resume();
+
+    const workletNode = new AudioWorkletNode(audioContext, 'pcm-worklet-processor');
+    workletNode.port.onmessage = ({ data }) => {
+      const incoming = new Int16Array(data);
+      let readOffset = 0;
+
+      while (readOffset < incoming.length) {
+        initializeBatch();
+
+        const copyLength = Math.min(incoming.length - readOffset, AUDIO_BATCH_SAMPLES - batchOffsetRef.current);
+        batchInt16Ref.current?.set(incoming.subarray(readOffset, readOffset + copyLength), batchOffsetRef.current);
+
+        batchOffsetRef.current += copyLength;
+        readOffset += copyLength;
+
+        if (batchOffsetRef.current === AUDIO_BATCH_SAMPLES) {
+          flushBatch();
+        }
+      }
+    };
+
+    audioContext.createMediaStreamSource(stream).connect(workletNode);
+    audioContextRef.current = audioContext;
+    workletNodeRef.current = workletNode;
+    setIsCapturing(true);
+  }, [flushBatch, initializeBatch]);
+
+  const stopCapture = useCallback(() => {
+    flushRemainder();
+
+    workletNodeRef.current?.disconnect();
+    workletNodeRef.current = null;
+
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+
+    setIsCapturing(false);
+  }, [flushRemainder]);
+
+  return {
+    isCapturing,
+    startCapture,
+    stopCapture,
+  };
+}
+
+function transcriptLabel(message: TranscriptMessage) {
+  return message.role === 'assistant' ? 'Examiner' : 'Student';
+}
 
 export default function Home() {
-  return <HomePage />;
+  const [serverUrl, setServerUrl] = useState(DEFAULT_EXAM_SERVER_URL);
+  const [userId, setUserId] = useState('');
+  const [examId, setExamId] = useState('');
+  const [attemptId, setAttemptId] = useState('');
+  const [isStarting, setIsStarting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isFinishing, setIsFinishing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const isReadyRef = useRef(false);
+  const isTtsPlayingRef = useRef(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setUserId(params.get('user_id') || '');
+    setExamId(params.get('exam_id') || '');
+    setAttemptId(params.get('attempt_id') || '');
+    setServerUrl(params.get('server') || DEFAULT_EXAM_SERVER_URL);
+  }, []);
+
+  const socketOptions = useMemo(
+    () => ({
+      userId: userId.trim() || undefined,
+      examId: examId.trim() || undefined,
+      attemptId: attemptId.trim() || undefined,
+    }),
+    [attemptId, examId, userId],
+  );
+
+  const {
+    isConnected,
+    isReady,
+    serverStatus,
+    statusMessage,
+    messages,
+    connect,
+    disconnect,
+    clearHistory,
+    sendAudioData,
+    sendMessage,
+    stopTts,
+    isTtsPlaying,
+  } = useVoiceSocket(serverUrl, socketOptions);
+
+  const { startCapture, stopCapture } = useAudioCapture(sendAudioData, () => isTtsPlayingRef.current);
+
+  useEffect(() => {
+    isReadyRef.current = isReady;
+  }, [isReady]);
+
+  useEffect(() => {
+    isTtsPlayingRef.current = isTtsPlaying;
+  }, [isTtsPlaying]);
+
+  useEffect(() => {
+    const finishMessage = [...messages].reverse().find((message) => message.finishComplete);
+    if (!finishMessage) {
+      return;
+    }
+
+    setIsFinishing(false);
+    stopCapture();
+    setIsRecording(false);
+
+    if (!finishMessage.success) {
+      setErrorMessage(finishMessage.error || 'The session could not be finalized.');
+    }
+  }, [messages, stopCapture]);
+
+  const stopSession = useCallback(() => {
+    stopTts();
+    stopCapture();
+    disconnect();
+    setIsRecording(false);
+    setIsFinishing(false);
+    setIsStarting(false);
+  }, [disconnect, stopCapture, stopTts]);
+
+  const startSession = useCallback(async () => {
+    setErrorMessage('');
+    setIsStarting(true);
+
+    try {
+      await connect();
+      await waitForReady(isReadyRef);
+      await startCapture();
+      setIsRecording(true);
+    } catch (error) {
+      stopSession();
+      setErrorMessage(error instanceof Error ? error.message : 'Could not start the voice agent.');
+    } finally {
+      setIsStarting(false);
+    }
+  }, [connect, startCapture, stopSession]);
+
+  const finishSession = useCallback(() => {
+    setErrorMessage('');
+    setIsFinishing(true);
+    stopTts();
+    stopCapture();
+    setIsRecording(false);
+    sendMessage({ type: 'finish_exam' });
+  }, [sendMessage, stopCapture, stopTts]);
+
+  const resetTranscript = useCallback(() => {
+    clearHistory();
+    setErrorMessage('');
+  }, [clearHistory]);
+
+  const canStart = Boolean(examId.trim() || attemptId.trim()) && !isConnected && !isStarting;
+  const currentStatus = statusMessage || (isConnected ? 'Connected' : 'Disconnected');
+  const activityStatus = isTtsPlaying ? 'Speaking' : isRecording ? 'Listening' : 'Idle';
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Veridex</p>
+          <h1>Oral Exam Voice Agent</h1>
+        </div>
+        <div className="status-pill">
+          <span className={`status-dot ${isReady ? 'ready' : isConnected ? 'connecting' : ''}`} />
+          <span>{currentStatus}</span>
+        </div>
+      </header>
+
+      <section className="workspace">
+        <aside className="controls-panel">
+          <label>
+            <span>Server</span>
+            <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} disabled={isConnected} />
+          </label>
+
+          <label>
+            <span>User ID</span>
+            <input value={userId} onChange={(event) => setUserId(event.target.value)} disabled={isConnected} />
+          </label>
+
+          <label>
+            <span>Exam ID</span>
+            <input value={examId} onChange={(event) => setExamId(event.target.value)} disabled={isConnected} />
+          </label>
+
+          <label>
+            <span>Attempt ID</span>
+            <input value={attemptId} onChange={(event) => setAttemptId(event.target.value)} disabled={isConnected} />
+          </label>
+
+          {errorMessage ? <div className="error-box">{errorMessage}</div> : null}
+
+          <div className="button-grid">
+            <button type="button" className="primary-button" onClick={startSession} disabled={!canStart}>
+              {isStarting ? 'Starting...' : 'Start'}
+            </button>
+            <button type="button" onClick={stopSession} disabled={!isConnected}>
+              Stop
+            </button>
+            <button type="button" className="danger-button" onClick={finishSession} disabled={!isConnected || isFinishing}>
+              {isFinishing ? 'Finishing...' : 'Finish'}
+            </button>
+            <button type="button" className="reset-button" onClick={resetTranscript}>
+              Reset Transcript
+            </button>
+          </div>
+
+          <div className="mic-status">
+            <span className={`mic-dot ${isRecording ? 'active' : ''}`} />
+            <span>{isRecording ? 'Microphone is streaming.' : serverStatus || 'Ready to connect.'}</span>
+          </div>
+        </aside>
+
+        <section className="transcript-panel">
+          <div className="transcript-header">
+            <h2>Transcript</h2>
+            <span>{activityStatus}</span>
+          </div>
+
+          <div className="transcript">
+            {messages.length === 0 ? (
+              <p className="empty-state">Conversation will appear here.</p>
+            ) : (
+              messages.map((message) => (
+                <article key={message.id} className={`message ${message.role}`}>
+                  <div className="message-label">{transcriptLabel(message)}</div>
+                  <p className="message-content">{message.content}</p>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      </section>
+    </main>
+  );
 }
