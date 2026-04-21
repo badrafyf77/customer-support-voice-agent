@@ -1,86 +1,59 @@
-# examiner-agent Backend
+# Voice Agent Backend
 
-This service is the realtime oral-exam engine for Veridex. It handles live audio input, speech-to-text, turn detection, exam-aware LLM generation, text-to-speech playback, transcript persistence, and oral-attempt submission.
+FastAPI backend for realtime voice-agent sessions. It receives microphone audio
+over WebSocket, transcribes speech, runs an agent turn, streams TTS audio back to
+the client, and optionally persists oral-exam progress to Supabase.
 
-It is not a generic chatbot backend anymore. In this project, it is the oral examination runtime used by the frontend exam room.
+The backend supports two runtime modes:
 
-## What This Backend Does
+- **Exam mode**: `/ws?user_id=...&exam_id=...&attempt_id=...` loads Supabase
+  context and runs the LangGraph-backed oral exam agent.
+- **Chat mode**: `/ws` without exam query params runs a simple voice chat agent.
 
-The backend is responsible for:
-
-- receiving microphone audio over WebSocket
-- transcribing the student in realtime
-- deciding when a student turn has ended
-- generating the next Veridex examiner turn
-- speaking that response back with streaming TTS
-- loading exam, rubric, attempt, and profile context from Supabase
-- orchestrating oral exam flow with LangGraph
-- finishing oral attempts and persisting transcript metadata
-
-## Oral Exam Runtime Architecture
+## Runtime Flow
 
 ```text
-Student audio
-  -> WebSocket
-  -> Audio input processor
-  -> Realtime transcription
-  -> Turn detection
-  -> LangGraph oral exam controller
-  -> LLM provider
-  -> Streaming text output
-  -> TTS synthesis
-  -> Audio streamed back to the frontend
-  -> Transcript + attempt metadata saved to Supabase
+Browser microphone
+  -> FastAPI WebSocket /ws
+  -> core/transport/websocket.py
+  -> core/nodes/stt/faster_whisper.py
+  -> core/session.py
+  -> agents/<agent>/agent.py
+  -> core/pipeline.py
+  -> services/llm.py
+  -> core/nodes/tts/realtime.py
+  -> WebSocket tts_chunk messages
 ```
 
-### Main components
+For the detailed file-by-file map, see [`code/ARCHITECTURE.md`](./code/ARCHITECTURE.md).
 
-- `code/server.py`: FastAPI app, WebSocket session lifecycle, exam finish flow
-- `code/core/session.py`: WebSocket session lifecycle
-- `code/core/models.py`: shared session and agent result models
-- `code/core/transport/websocket.py`: audio ingestion and STT feed pipeline
-- `code/core/nodes/`: STT/TTS runtime nodes
-- `code/core/pipeline.py`: LLM + TTS orchestration
-- `code/agents/base.py`: stable `BaseAgent.run_turn(...)` runtime contract
-- `code/agents/exam/agent.py`: LangGraph exam controller for question pacing and automatic closing
-- `code/agents/exam/prompts.py`: personalized examiner system prompt builder
-- `code/services/database.py`: Supabase exam/profile/attempt access
-- `code/services/llm.py`: LLM provider access
-- `code/core/voice_runtime_pool.py`: warmed runtime pooling for concurrency management
-- `code/config/global.yaml`: shared config defaults merged with per-agent config
+## Important Files
 
-## How It Works In Veridex
+```text
+code/
+├── server.py                    # FastAPI app and HTTP/WebSocket routes
+├── config/global.yaml           # shared defaults
+├── agents/
+│   ├── base.py                  # BaseAgent.run_turn(...) contract
+│   ├── chat/agent.py            # simple voice chat agent
+│   └── exam/                    # oral exam agent, prompts, config
+├── core/
+│   ├── session.py               # WebSocket session lifecycle
+│   ├── pipeline.py              # LLM -> TTS orchestration
+│   ├── voice_runtime_pool.py    # warmed runtime leasing/reuse
+│   ├── transport/websocket.py   # audio packet handling/resampling
+│   └── nodes/
+│       ├── stt/faster_whisper.py
+│       └── tts/realtime.py
+└── services/
+    ├── database.py              # Supabase integration
+    ├── llm.py                   # vLLM/OpenAI-compatible LLM client
+    └── voice_verification.py
+```
 
-For each oral exam session:
+## Docker Quick Start
 
-1. The frontend connects to `/ws` with `user_id`, `exam_id`, and `attempt_id`.
-2. The backend loads the student profile, exam metadata, rubric, and attempt transcript.
-3. A personalized examiner prompt is built from that context.
-4. The LangGraph controller decides when Veridex should ask the first question, ask the next question, or close the exam.
-5. Student speech is transcribed in realtime.
-6. Veridex generates one examiner turn at a time and streams it back as audio.
-7. When the target number of questions is completed, the backend closes the oral exam automatically.
-8. The attempt is submitted and persisted.
-
-## Supported LLM Provider Modes
-
-| Provider | Setup     | Best Use Case                | Notes                       |
-| -------- | --------- | ---------------------------- | --------------------------- |
-| `vllm`   | local GPU | best default for performance | recommended compose default |
-| `openai` | API key   | quick external testing       | simple setup                |
-
-## Quick Start
-
-### Prerequisites
-
-- Docker Engine
-- Docker Compose plugin
-- NVIDIA GPU drivers and `nvidia-smi` if you want GPU-backed local inference
-- NVIDIA Container Toolkit for GPU Docker access
-
-### Default stack: vLLM + examiner
-
-From this directory:
+From `backend/ExaminerAgent`:
 
 ```bash
 cp .env.example .env
@@ -89,105 +62,134 @@ docker compose up -d --build
 
 Default ports:
 
-- app: `http://162.243.59.37:8080`
-- vLLM: `http://162.243.59.37:8000`
+- Backend app: `http://localhost:8080`
+- vLLM OpenAI-compatible server: `http://localhost:8000`
 
 Useful checks:
 
 ```bash
-docker compose logs -f vllm
 docker compose logs -f app
-curl http://162.243.59.37:8080/
+docker compose logs -f vllm
+curl http://localhost:8080/
 ```
 
-The first startup can take a long time because the image builds and model assets are downloaded.
+The first build/start can take a while because Docker downloads Python
+dependencies and model assets.
 
-## Compose files
+## Prerequisites For Docker
 
-| File                      | Stack           | App Port | When To Use It                                     |
-| ------------------------- | --------------- | -------- | -------------------------------------------------- |
-| `docker-compose.yml`      | examiner + vLLM | `8080`   | recommended default                                |
-| `docker-compose.vllm.yml` | examiner + vLLM | `8080`   | older retained variant with fewer runtime settings |
+- Docker Engine and Docker Compose plugin
+- NVIDIA GPU drivers if using the default vLLM stack
+- NVIDIA Container Toolkit for GPU access inside containers
+
+The compose stack uses named volumes for Hugging Face and Torch caches:
+
+- `huggingface_cache`
+- `torch_cache`
+
+## Compose Files
+
+| File | Purpose |
+| --- | --- |
+| `docker-compose.yml` | Recommended backend + vLLM stack, with healthcheck and runtime pool env vars. |
+| `docker-compose.vllm.yml` | Older vLLM compose variant kept for reference. |
 
 ## Configuration
 
-Copy [`.env.example`](./.env.example) to `.env` and fill in what applies to your setup.
+Copy [`.env.example`](./.env.example) to `.env`.
 
-### Core runtime variables
+Common variables:
 
-```bash
-LLM_PROVIDER=vllm
-LLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
-VLLM_BASE_URL=http://vllm:8000/v1
+| Variable | Purpose |
+| --- | --- |
+| `LLM_PROVIDER` | `vllm` or `openai`. Docker default is `vllm`. |
+| `LLM_MODEL` | Model name sent to the configured LLM provider. |
+| `VLLM_BASE_URL` | OpenAI-compatible vLLM URL, usually `http://vllm:8000/v1` in Docker. |
+| `OPENAI_API_KEY` | Required only when `LLM_PROVIDER=openai`. |
+| `STT_MODEL` | Main faster-whisper model, default `medium.en`. |
+| `STT_REALTIME_MODEL` | Optional realtime model when not sharing the main STT model. |
+| `STT_USE_MAIN_MODEL_FOR_REALTIME` | Use one STT model for both realtime and final transcription. |
+| `TURN_DETECTION_DEVICE` | Device for turn-detection model, usually `cpu` or `cuda`. |
+| `VOICE_RUNTIME_MIN_WARM` | Number of warmed voice runtimes to keep ready. |
+| `VOICE_RUNTIME_MAX_CONCURRENT` | Maximum concurrent voice sessions. |
+| `SUPABASE_URL` | Required for exam sessions. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required for exam sessions. |
 
-LOG_LEVEL=INFO
-MAX_AUDIO_QUEUE_SIZE=50
-VOICE_RUNTIME_MIN_WARM=1
-VOICE_RUNTIME_MAX_CONCURRENT=1
-VOICE_RUNTIME_IDLE_TTL_SECONDS=300
-VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS=30
-VLLM_STARTUP_TIMEOUT_SECONDS=180
-VLLM_HEALTHCHECK_INTERVAL_SECONDS=2
+Agent config is layered:
 
-STT_MODEL=medium.en
-STT_REALTIME_MODEL=small.en
-STT_USE_MAIN_MODEL_FOR_REALTIME=true
-TURN_DETECTION_DEVICE=cpu
-```
+1. `code/config/global.yaml`
+2. `code/agents/<agent>/config.yaml`
+3. supported environment overrides
 
-### Supabase integration
+## HTTP / WebSocket API
 
-These enable exam-aware oral sessions:
+### `GET /`
 
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+Health/status payload.
 
-They are used for:
+### `GET /voice-reference?user_id=...`
 
-- loading profile context
-- loading exam and rubric metadata
-- loading and updating attempt transcripts
-- persisting oral-attempt submission metadata
+Checks whether a user has a stored voice reference.
 
-### OpenAI Provider
+### `POST /voice-reference`
 
-- `OPENAI_API_KEY` (required only when `LLM_PROVIDER=openai`)
-- Set `LLM_PROVIDER=openai` in `.env` and choose an OpenAI model in `LLM_MODEL` (for example `gpt-5`)
+Uploads a voice enrollment sample.
 
-## WebSocket API
+Form fields:
 
-Main endpoint:
+- `user_id`
+- `audio`
 
-- `/ws`
-- `/voice-reference`
+### `WS /ws`
 
-Typical query parameters:
+Runs a voice session.
+
+Query params:
 
 - `user_id`
 - `exam_id`
 - `attempt_id`
 
-The frontend oral room uses these to bind the live session to an exam attempt.
+When any of those params are present, the backend loads exam context and runs the
+exam agent. Without them, it runs the chat agent.
 
-Evaluation handoff is not triggered by `examiner-agent` itself anymore. The oral attempt is submitted here, and any evaluator workflow should be triggered by the frontend or another backend service after submission.
+## Local Development Without Docker
 
-## Notes For Frontend Integration
-
-- If you use the default vLLM compose stack, point the frontend to `ws://162.243.59.37:8080`
-- If you use `LLM_PROVIDER=openai` with the same compose stack, the frontend URL stays `ws://162.243.59.37:8080`
-
-## Development Notes
-
-Run locally without Docker:
+Local backend runs are useful for quick code iteration, but the Docker stack is
+more representative because it handles GPU/runtime dependencies and vLLM.
 
 ```bash
+cd backend/ExaminerAgent
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 cd code
 python server.py
 ```
 
-This is useful for iteration, but the Docker setup is the more representative runtime for the full local stack.
+For OpenAI-only local development, set:
 
-## Additional Docs
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+LLM_MODEL=gpt-5
+```
 
-- [Project README](../../README.md)
-- [Frontend README](../../frontend/README.md)
+## Frontend Integration
+
+The frontend connects to this backend through `NEXT_PUBLIC_VOICE_SERVER_URL`.
+For the default Docker backend:
+
+```bash
+NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
+```
+
+See [`../../frontend/README.md`](../../frontend/README.md).
+
+## Notes
+
+- STT and TTS runtime logic live under `code/core/nodes/`, not `services/`.
+- `services/` is for external integrations such as Supabase, LLM API access, and
+  voice verification.
+- Oral-attempt evaluation is not triggered here; this backend submits/saves the
+  oral attempt and another system should handle evaluation.
