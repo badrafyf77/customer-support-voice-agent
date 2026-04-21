@@ -603,7 +603,7 @@ async def process_incoming_data(
                     # STEP 4: Wait a moment for everything to stop cleanly
                     await asyncio.sleep(0.2)
                     
-                    # STEP 5: Finalize the oral exam attempt (no scoring in examiner-agent)
+                    # STEP 5: Finalize the oral exam attempt (no scoring in this backend)
                     logger.info("🖥️🧾 Finalizing oral exam attempt...")
                     asyncio.create_task(
                         trigger_exam_finish(
@@ -1648,7 +1648,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "ready",
-            "message": "Oral exam session ready. Veridex is starting the exam."
+            "message": "Oral exam session ready. The exam agent is starting the exam."
         })
         log_event("🚀", f"[User {display_id}] Exam session ready")
 

@@ -680,7 +680,7 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Veridex</p>
+          <p className="eyebrow">Voice Agent</p>
           <h1>Voice Chat</h1>
         </div>
         <div className="status-pill">

@@ -97,10 +97,10 @@ async def upload_voice_reference(
 
 @app.get("/")
 async def get_index() -> JSONResponse:
-    """Return a small status payload for the standalone examiner backend."""
+    """Return a small status payload for the voice backend."""
     return JSONResponse(
         {
-            "service": "examiner-agent",
+            "service": "voice-agent-backend",
             "status": "ok",
             "websocket_path": "/ws",
             "voice_reference_path": "/voice-reference",

@@ -2,8 +2,8 @@ services:
   # Your FastAPI Application Service
   app:
     build: .
-    image: examiner-agent:latest
-    container_name: examiner-agent-app
+    image: voice-agent-backend:latest
+    container_name: voice-agent-backend
     ports:
       - "8080:8000" # Changed to 8080 since vLLM uses 8000
     environment:
@@ -39,7 +39,7 @@ services:
   # vLLM Server Service - Optimized for multiple concurrent users
   vllm:
     image: vllm/vllm-openai:latest
-    container_name: examiner-agent-vllm
+    container_name: voice-agent-vllm
     ports:
       - "8000:8000"
     command:

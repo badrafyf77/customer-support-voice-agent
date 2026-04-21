@@ -53,7 +53,7 @@ code/
 
 ## Docker Quick Start
 
-From `backend/ExaminerAgent`:
+From `backend`:
 
 ```bash
 cp .env.example .env
@@ -159,7 +159,7 @@ Local backend runs are useful for quick code iteration, but the Docker stack is
 more representative because it handles GPU/runtime dependencies and vLLM.
 
 ```bash
-cd backend/ExaminerAgent
+cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -184,7 +184,7 @@ For the default Docker backend:
 NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
 ```
 
-See [`../../frontend/README.md`](../../frontend/README.md).
+See [`../frontend/README.md`](../frontend/README.md).
 
 ## Notes
 

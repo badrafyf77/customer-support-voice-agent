@@ -2,28 +2,27 @@
 
 Realtime browser-to-backend voice-agent project with:
 
-- a **FastAPI voice backend** in `backend/ExaminerAgent`
+- a **FastAPI voice backend** in `backend`
 - a **Next.js voice chat frontend** in `frontend`
 - support for simple voice chat and Supabase-backed oral exam sessions
 
-Despite the repository name, the current backend includes an oral-exam agent and
-a simple chat agent. The architecture is intentionally modular so another agent,
-such as customer support, can be added under `backend/ExaminerAgent/code/agents/`.
+The backend includes an oral-exam agent and a simple chat agent. The architecture
+is intentionally modular so another agent, such as customer support, can be added
+under `backend/code/agents/`.
 
 ## Project Structure
 
 ```text
 .
 ├── backend/
-│   └── ExaminerAgent/
-│       ├── code/
-│       │   ├── agents/          # chat/exam agents
-│       │   ├── core/            # session, transport, STT/TTS nodes, pipeline
-│       │   ├── services/        # database, LLM API, voice verification
-│       │   └── server.py        # FastAPI entrypoint
-│       ├── docker-compose.yml   # backend + vLLM stack
-│       ├── Dockerfile
-│       └── README.md
+│   ├── code/
+│   │   ├── agents/              # chat/exam agents
+│   │   ├── core/                # session, transport, STT/TTS nodes, pipeline
+│   │   ├── services/            # database, LLM API, voice verification
+│   │   └── server.py            # FastAPI entrypoint
+│   ├── docker-compose.yml       # backend + vLLM stack
+│   ├── Dockerfile
+│   └── README.md
 └── frontend/
     ├── src/app/page.tsx         # voice chat UI
     ├── public/static/           # audio worklets
@@ -45,7 +44,7 @@ Browser microphone
 ```
 
 For a backend file-by-file architecture map, see
-[`backend/ExaminerAgent/code/ARCHITECTURE.md`](backend/ExaminerAgent/code/ARCHITECTURE.md).
+[`backend/code/ARCHITECTURE.md`](backend/code/ARCHITECTURE.md).
 
 ## Quick Start
 
@@ -54,7 +53,7 @@ For a backend file-by-file architecture map, see
 The default backend stack runs FastAPI plus vLLM.
 
 ```bash
-cd backend/ExaminerAgent
+cd backend
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -102,7 +101,7 @@ Connect to `/ws` without query params.
 
 This uses:
 
-- `backend/ExaminerAgent/code/agents/chat/agent.py`
+- `backend/code/agents/chat/agent.py`
 
 ### Exam Mode
 
@@ -114,7 +113,7 @@ Connect to `/ws` with one or more exam identifiers:
 
 This uses:
 
-- `backend/ExaminerAgent/code/agents/exam/agent.py`
+- `backend/code/agents/exam/agent.py`
 - Supabase context from `services/database.py`
 
 Exam mode requires:
@@ -128,9 +127,9 @@ SUPABASE_SERVICE_ROLE_KEY=...
 
 Backend config is layered:
 
-1. `backend/ExaminerAgent/code/config/global.yaml`
-2. `backend/ExaminerAgent/code/agents/<agent>/config.yaml`
-3. environment variables from `backend/ExaminerAgent/.env`
+1. `backend/code/config/global.yaml`
+2. `backend/code/agents/<agent>/config.yaml`
+3. environment variables from `backend/.env`
 
 Frontend config:
 
@@ -149,8 +148,8 @@ NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
 
 Backend docs:
 
-- [`backend/ExaminerAgent/README.md`](backend/ExaminerAgent/README.md)
-- [`backend/ExaminerAgent/code/ARCHITECTURE.md`](backend/ExaminerAgent/code/ARCHITECTURE.md)
+- [`backend/README.md`](backend/README.md)
+- [`backend/code/ARCHITECTURE.md`](backend/code/ARCHITECTURE.md)
 
 Frontend docs:
 
@@ -160,7 +159,7 @@ Useful checks:
 
 ```bash
 # backend syntax
-python3 -m compileall backend/ExaminerAgent/code
+python3 -m compileall backend/code
 
 # frontend production build
 cd frontend

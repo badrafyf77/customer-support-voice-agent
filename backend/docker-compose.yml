@@ -7,8 +7,8 @@ services:
         STT_MODEL: ${STT_MODEL:-medium.en}
         STT_REALTIME_MODEL: ${STT_REALTIME_MODEL:-small.en}
         STT_USE_MAIN_MODEL_FOR_REALTIME: ${STT_USE_MAIN_MODEL_FOR_REALTIME:-true}
-    image: examiner-agent:latest
-    container_name: examiner-agent-app
+    image: voice-agent-backend:latest
+    container_name: voice-agent-backend
     ports:
       - "8080:8000" # Changed to 8080 since vLLM uses 8000
     environment:
@@ -55,7 +55,7 @@ services:
   # vLLM Server Service - Balanced for LLM + STT/VAD/TTS on same GPU
   vllm:
     image: vllm/vllm-openai:latest
-    container_name: examiner-agent-vllm
+    container_name: voice-agent-vllm
     ports:
       - "8000:8000"
     command:

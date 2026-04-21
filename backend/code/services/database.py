@@ -1,5 +1,5 @@
 """
-Database module for loading Veridex profiles, exams, attempts, and rubric data from Supabase.
+Database module for loading profiles, exams, attempts, and rubric data from Supabase.
 """
 import logging
 from typing import Optional, Dict, Any, List
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class DatabaseClient:
     """
-    Handles database operations for Veridex exam sessions.
+    Handles database operations for voice-agent exam sessions.
     """
 
     def __init__(self):
@@ -46,23 +46,23 @@ class DatabaseClient:
 
     def get_app_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
-        Fetch the Veridex profile from the profiles table.
+        Fetch the application profile from the profiles table.
         """
         if not self.enabled or not self.client:
-            logger.warning(f"⚠️ Database not enabled, cannot load Veridex profile for user {user_id}")
+            logger.warning(f"⚠️ Database not enabled, cannot load profile for user {user_id}")
             return None
 
         try:
             response = self.client.table("profiles").select("*").eq("user_id", user_id).maybe_single().execute()
 
             if response.data:
-                logger.info(f"✅ Loaded Veridex profile for user {user_id}: {response.data.get('full_name', 'Unknown')}")
+                logger.info(f"✅ Loaded profile for user {user_id}: {response.data.get('full_name', 'Unknown')}")
                 return response.data
 
-            logger.warning(f"⚠️ No Veridex profile found for user {user_id}")
+            logger.warning(f"⚠️ No profile found for user {user_id}")
             return None
         except Exception as exc:
-            logger.error(f"❌ Error loading Veridex profile for {user_id}: {exc}")
+            logger.error(f"❌ Error loading profile for {user_id}: {exc}")
             return None
 
     def get_exam(self, exam_id: str) -> Optional[Dict[str, Any]]:
