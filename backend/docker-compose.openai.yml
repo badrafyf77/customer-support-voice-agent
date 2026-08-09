@@ -1,0 +1,54 @@
+services:
+  # FastAPI voice backend, using OpenAI as the LLM provider (no local vLLM server).
+  app:
+    build:
+      context: .
+      args:
+        STT_MODEL: ${STT_MODEL:-medium.en}
+        STT_REALTIME_MODEL: ${STT_REALTIME_MODEL:-small.en}
+        STT_USE_MAIN_MODEL_FOR_REALTIME: ${STT_USE_MAIN_MODEL_FOR_REALTIME:-true}
+    image: voice-agent-backend:openai
+    container_name: voice-agent-backend
+    ports:
+      - "8080:8000"
+    environment:
+      # --- LLM Configuration (OpenAI) ---
+      - LLM_PROVIDER=openai
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+      # --- Other App Environment Variables ---
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_AUDIO_QUEUE_SIZE=${MAX_AUDIO_QUEUE_SIZE:-50}
+      - VOICE_RUNTIME_MIN_WARM=${VOICE_RUNTIME_MIN_WARM:-1}
+      - VOICE_RUNTIME_MAX_CONCURRENT=${VOICE_RUNTIME_MAX_CONCURRENT:-1}
+      - VOICE_RUNTIME_IDLE_TTL_SECONDS=${VOICE_RUNTIME_IDLE_TTL_SECONDS:-300}
+      - VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS=${VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS:-30}
+      - STT_MODEL=${STT_MODEL:-medium.en}
+      - STT_REALTIME_MODEL=${STT_REALTIME_MODEL:-small.en}
+      - STT_USE_MAIN_MODEL_FOR_REALTIME=${STT_USE_MAIN_MODEL_FOR_REALTIME:-true}
+      - TURN_DETECTION_DEVICE=${TURN_DETECTION_DEVICE:-cpu}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/home/appuser/.cache/huggingface
+      - TORCH_HOME=/home/appuser/.cache/torch
+    volumes:
+      - huggingface_cache:/home/appuser/.cache/huggingface
+      - torch_cache:/home/appuser/.cache/torch
+    # Remove this whole "deploy" block if your cloud VM has no NVIDIA GPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+    restart: unless-stopped
+
+volumes:
+  huggingface_cache:
+    driver: local
+  torch_cache:
+    driver: local
