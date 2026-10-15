@@ -425,6 +425,8 @@ sentencepiece==0.2.2
     #   xgrammar
 sentry-sdk==2.72.0
     # via fastapi-cloud-cli
+setuptools==84.0.0
+    # via -r backend/studio/vllm.in
 shellingham==1.5.4
     # via typer
 sniffio==1.3.1

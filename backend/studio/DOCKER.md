@@ -245,6 +245,12 @@ top. Each service declares its own target, command and predecessor. Only
 `container_entrypoint.sh` dispatches commands, while `export_asr.py` owns the
 Python conversion and cache/validation logic. No inference stack imports PEFT.
 
+Both Triton environments explicitly pin `setuptools` as a runtime dependency.
+Their dependency stages import Triton after installation, without loading GPU
+models, so a missing Python runtime dependency fails the image build rather than
+restarting an unhealthy service. System Python packages are not shared with uv
+virtual environments.
+
 ## Optional existing-export mode
 
 If a verified export is already on Studio, set `ASR_EXPORT_DIR` in `.env` and use

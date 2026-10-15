@@ -2,3 +2,5 @@ vllm==0.8.5
 transformers==4.51.3
 huggingface-hub==0.36.2
 numpy==1.26.4
+# Triton 3.2 imports setuptools at runtime; uv venv does not seed it.
+setuptools==84.0.0

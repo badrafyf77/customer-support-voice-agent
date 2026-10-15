@@ -31,12 +31,14 @@ RUN uv venv --python /usr/bin/python3.10 /opt/darija/backend \
 FROM base AS vllm-deps
 COPY studio/vllm.lock /tmp/vllm.lock
 RUN uv venv --python /usr/bin/python3.10 /opt/darija/vllm \
-    && uv pip sync --python /opt/darija/vllm/bin/python /tmp/vllm.lock
+    && uv pip sync --python /opt/darija/vllm/bin/python /tmp/vllm.lock \
+    && /opt/darija/vllm/bin/python -c "import triton; import triton.runtime.build"
 
 FROM base AS silma-deps
 COPY studio/silma.lock /tmp/silma.lock
 RUN uv venv --python /usr/bin/python3.10 /opt/darija/silma \
-    && uv pip sync --python /opt/darija/silma/bin/python /tmp/silma.lock
+    && uv pip sync --python /opt/darija/silma/bin/python /tmp/silma.lock \
+    && /opt/darija/silma/bin/python -c "import triton; import triton.runtime.build"
 
 # 3. Shared source layer, copied once and reused by every final image.
 FROM base AS source

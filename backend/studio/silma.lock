@@ -447,6 +447,8 @@ scipy==1.15.3
     #   vocos
 semantic-version==2.10.0
     # via gradio
+setuptools==84.0.0
+    # via -r backend/studio/silma.in
 shellingham==1.5.4
     # via typer
 six==1.17.0

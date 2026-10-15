@@ -1,5 +1,14 @@
 # Phase 6 implementation — 15 October 2026
 
+Studio startup evidence: the user completed the initial image builds and model
+preparation (`prepare-models` exited 0). vLLM then failed before loading weights
+because Triton 3.2.0 imports `setuptools`, which was missing from its isolated uv
+environment. The same omission existed in SILMA. Both environments now explicitly
+pin the runtime dependency, and both Docker dependency stages smoke-import Triton.
+The exact Triton runtime module reproduced the missing-import error in a fresh
+Python 3.10 environment and passed after installing the pinned dependency. Live
+vLLM/SILMA startup with the fix still needs the user's rebuilt Studio images.
+
 Latest setup: ready-to-run ASR is now built automatically from the pinned HF
 Whisper base plus trained Darija adapter in a CPU preparation container. No
 manual upload or Modal dependency is required. The original export recipe,

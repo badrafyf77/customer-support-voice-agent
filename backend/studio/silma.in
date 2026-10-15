@@ -14,3 +14,5 @@ soundfile==0.13.1
 vocos==0.1.0
 fastapi==0.135.4
 uvicorn==0.42.0
+# torch 2.6's Triton 3.2 imports setuptools at runtime in this isolated venv.
+setuptools==84.0.0
