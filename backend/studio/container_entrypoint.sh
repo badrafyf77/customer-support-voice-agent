@@ -7,12 +7,25 @@ if [[ $# -gt 0 ]]; then shift; fi
 case "$mode" in
     prepare)
         : "${HF_TOKEN:?Set HF_TOKEN in backend/.env with private-model read access}"
-        if [[ ! -f /asr-export/model.bin ]]; then
-            echo "Missing corrected ASR export. Set ASR_EXPORT_DIR in backend/.env to the folder containing model.bin and its four companion files." >&2
-            exit 1
-        fi
-        exec "$state_root/backend/bin/python" "$studio_dir/prepare_models.py" \
-            --root "${DARIJA_MODEL_ROOT:?}" --asr-export /asr-export "$@"
+        case "${ASR_SOURCE:-huggingface}" in
+            huggingface)
+                "$state_root/asr-export/bin/python" "$studio_dir/export_asr.py" --root "${DARIJA_MODEL_ROOT:?}"
+                asr_export="$DARIJA_MODEL_ROOT/asr"
+                ;;
+            local)
+                asr_export=/asr-export
+                if [[ ! -f "$asr_export/model.bin" ]]; then
+                    echo "Set ASR_EXPORT_DIR and enable docker-compose.asr-local.yml for an existing export." >&2
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "ASR_SOURCE must be huggingface or local." >&2
+                exit 1
+                ;;
+        esac
+        exec "$state_root/asr-export/bin/python" "$studio_dir/prepare_models.py" \
+            --root "${DARIJA_MODEL_ROOT:?}" --asr-export "$asr_export" "$@"
         ;;
     backend|vllm|silma)
         exec bash "$studio_dir/start_${mode}.sh" "$@"

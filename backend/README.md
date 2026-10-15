@@ -10,8 +10,9 @@ inside each folder under [`code/agents`](./code/agents).
 ## Darija deployment
 
 For the Lightning L4 backend and local frontend, follow
-[studio/DOCKER.md](studio/DOCKER.md). Configure `backend/.env`, upload the corrected
-ASR export once, and run `docker compose up -d --build`. Expose port 8080 through
+[studio/DOCKER.md](studio/DOCKER.md). Configure `HF_TOKEN` in `backend/.env` and
+run `docker compose up -d --build`. Compose downloads the pinned ASR base/adapter
+from HF and builds verified ready-to-run CT2 files automatically. Expose port 8080 through
 Lightning and put its HTTPS URL in the local frontend's `.env.local`. The default
 Compose file runs Darija; the previous English recipe is `docker-compose.english.yml`.
 GPU tuning/acceptance remain pending a Studio run.
@@ -63,7 +64,7 @@ From `backend`:
 
 ```bash
 cp -n .env.example .env
-# Edit HF_TOKEN and ASR_EXPORT_DIR in .env before starting.
+# Edit HF_TOKEN in .env; ASR preparation is automatic.
 docker compose up -d --build
 ```
 

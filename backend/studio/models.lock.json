@@ -9,7 +9,8 @@
       "base_revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
       "directory": "asr",
       "format": "ctranslate2-float16",
-      "source": "modal volume darija-turn-detection/user-asr-turbo-e9ff459f2f58/ctranslate2",
+      "source": "Pinned Hugging Face base and Darija adapter; CPU merge and FP16 export via studio/export_asr.py",
+      "reference_export_provenance": "docs/darija/asr-artifact-verification.json",
       "files": {
         "config.json": {
           "sha256": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e",

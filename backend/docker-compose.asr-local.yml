@@ -1,0 +1,12 @@
+# Optional existing-export override. Default Compose builds the export from HF.
+services:
+  prepare-models:
+    environment:
+      ASR_SOURCE: local
+    volumes:
+      - type: bind
+        source: ${ASR_EXPORT_DIR:?Set ASR_EXPORT_DIR for local ASR mode}
+        target: /asr-export
+        read_only: true
+        bind:
+          create_host_path: false

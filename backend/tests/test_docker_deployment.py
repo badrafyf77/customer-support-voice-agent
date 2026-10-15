@@ -68,9 +68,9 @@ class ComposeTests(unittest.TestCase):
             mount = next(m for m in service['volumes'] if m['target'] == '/models')
             self.assertEqual(mount['type'], 'volume')
             self.assertEqual(mount.get('read_only', False), name != 'prepare-models')
-        source = next(m for m in self.services['prepare-models']['volumes'] if m['target'] == '/asr-export')
-        self.assertTrue(source['read_only'])
-        self.assertFalse(source['bind']['create_host_path'])
+        self.assertFalse(any(m['type'] == 'bind' for m in self.services['prepare-models']['volumes']),
+                         'Default HF preparation must not require a Studio bind directory')
+        self.assertEqual(self.services['prepare-models']['build']['target'], 'prepare')
 
 
 class HealthTests(unittest.TestCase):

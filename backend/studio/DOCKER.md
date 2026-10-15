@@ -18,33 +18,32 @@ cd customer-support-voice-agent/backend
 For an existing Darija deployment clone, enter it, run `git pull --ff-only`, then
 `cd backend`. All following Compose commands run from **backend/**.
 
-## 2. Upload the ASR export once
+## 2. Automatic ready-to-run ASR preparation from Hugging Face
 
-The correct CTranslate2 export is not stored in Git or the HF adapter repository.
-Upload the five files from this existing Mac folder using the Studio file browser
-or your existing transfer method:
+No manual export upload or Modal credentials are required. The selected model is
+`afyfbadreddine77/whisper-large-v3-turbo-darija`, adapter revision
+`e9ff459f2f5823d4f9093db8854c691eb78045d3`. Its pinned HF repository contains
+the trained LoRA adapter. The setup container automatically:
 
-```text
-/Users/afyfbadreddine/.codex/worktrees/darija-voice-model-review/customer-support-voice-agent/backend/studio/.models/asr-download/ctranslate2/
-```
+1. Downloads `openai/whisper-large-v3-turbo` at the pinned base revision and
+   the selected Darija adapter directly from Hugging Face.
+2. Checks that the intended trained, nonzero LoRA weights loaded, then safely
+   merges them on CPU. No training or GPU job is performed.
+3. Saves the processor/tokenizer and converts the merged model to FP16
+   CTranslate2, using the original export recipe's isolated pinned toolchain.
+4. Checks all five files against the known correct export's size/SHA-256 before
+   publishing them to the persistent model volume. A mismatch fails setup.
 
-Place them in a Studio folder, for example:
-
-```text
-/teamspace/studios/this_studio/darija-asr-export/
-  config.json
-  model.bin
-  preprocessor_config.json
-  tokenizer.json
-  vocabulary.json
-```
-
-Set `ASR_EXPORT_DIR` to that folder. `model.bin` is approximately 1.6 GB and its
-SHA-256 must be
+The expected `model.bin` SHA-256 remains
 `c130a5ee127bda0df5088ba815bddbe34b02f244903ab4da13a3460b28e49646`.
-The preparation container verifies every file; the 125h export is not accepted.
-If the folder is already on Studio, just point `.env` to it. No transfer is needed
-for Atlas, turn detection, SILMA or Vocos; Compose downloads those automatically.
+The separate 125h model is not used. Later starts reuse verified ready-to-run
+files without repeating the merge/conversion. The other models are downloaded
+at their pinned HF revisions as before.
+
+This preparation runs automatically as part of `docker compose up -d --build`,
+after image builds and before inference services start. Private downloads use
+runtime `.env` credentials; image layers contain code/dependencies. The first
+setup requires CPU memory/disk for the base, adapter, merge and conversion.
 
 ## 3. Configure .env
 
@@ -56,7 +55,8 @@ Edit **backend/.env** in Studio:
 
 ```dotenv
 HF_TOKEN=your_hugging_face_read_token
-ASR_EXPORT_DIR=/teamspace/studios/this_studio/darija-asr-export
+ASR_SOURCE=huggingface
+ASR_EXPORT_CPU_THREADS=4
 BACKEND_PORT=8080
 VLLM_GPU_MEMORY_UTILIZATION=0.40
 SILMA_VOICE_ID=voice1
@@ -68,7 +68,7 @@ VLLM_STARTUP_TIMEOUT_SECONDS=1200
 VLLM_HEALTHCHECK_INTERVAL_SECONDS=2
 ```
 
-The token needs read access to your private turn/TTS model repositories. `.env` is
+The token needs read access to your private ASR adapter, turn and TTS repositories. `.env` is
 ignored by Git and Docker's build context; it is injected only at container runtime.
 Models and caches persist in named Docker volumes. You do not need Lightning
 Secrets, OpenAI credentials or Supabase credentials for general Darija chat.
@@ -86,7 +86,8 @@ docker compose ps -a
 docker compose logs -f
 ```
 
-Compose builds three isolated pinned CUDA 12.4/Python 3.10 stacks. It runs the
+Compose builds four isolated pinned Python 3.10 environments: CPU model
+preparation, backend, vLLM and SILMA. The GPU images use CUDA 12.4. It runs the
 preparation container first, starts vLLM after preparation succeeds, then starts
 SILMA and finally the voice backend when their predecessors are healthy. The first
 build/download can take time. The completed preparation container should show
@@ -158,11 +159,13 @@ docker compose ps -a
 docker compose logs -f app
 docker compose logs --tail=100 prepare-models vllm silma
 
-# Apply .env changes (restart alone does not re-read environment values)
+# Apply .env changes; stop first to preserve GPU loading/profiling order.
+docker compose down
 docker compose up -d
 
 # Rebuild after a code update
 git pull --ff-only
+docker compose down
 docker compose up -d --build
 
 # Stop/remove containers; named model/cache volumes remain
@@ -180,10 +183,9 @@ docker compose run --rm --no-deps app \
 
 ## Troubleshooting and phase 6 measurements
 
-- Missing bind folder: fix `ASR_EXPORT_DIR` to the actual Studio folder. A missing
-  directory is rejected instead of silently creating an empty one.
 - Preparation failure: inspect `docker compose logs prepare-models`; check the
-  token's private-model access or the export hash. After correcting it, rerun up.
+  token's private-model access, CPU memory/disk or export hash. A provenance
+  mismatch must not be bypassed. After correcting the cause, rerun up.
 - GPU OOM: inspect the failing service and `nvidia-smi`. The allocation is still
   provisional. Stop the stack before changing the budget and repeat the combined
   run; do not increase worker/conversation counts or restore the old 80% setting.
@@ -215,3 +217,42 @@ a successful Linux GPU image build or live conversation.
 The previous English Compose recipe remains in `docker-compose.english.yml`
 with its old template `.env.english.example`. The native/non-Docker alternative
 remains in [RUNBOOK.md](RUNBOOK.md); it is not required for this setup.
+
+## Build and startup organization
+
+`Dockerfile.darija` separates shared system dependencies, four isolated dependency
+stages, one shared source stage, and four final targets. Each dependency stage
+copies only its lockfile before installation, so source edits preserve the
+expensive dependency cache. BuildKit may build independent stages concurrently;
+their `FROM`/`COPY --from` dependencies define the build graph.
+
+| Target | Dependency lock | Responsibility |
+| --- | --- | --- |
+| `prepare` | `studio/asr-export.lock` | HF base/adapter merge, CT2 conversion and model preparation |
+| `vllm` | `studio/vllm.lock` | Atlas inference |
+| `silma` | `studio/silma.lock` | Selected voice inference |
+| `backend` | `studio/backend.lock` | STT/turn/session HTTP and WebSocket server |
+
+`docker-compose.yml` owns startup ordering and readiness:
+
+```text
+prepare-models exits successfully -> vllm healthy -> silma healthy -> app starts
+```
+
+Shared build, healthcheck, environment and GPU settings are declared once at the
+top. Each service declares its own target, command and predecessor. Only
+`prepare-models` can write the model volume; inference services mount it read-only.
+`container_entrypoint.sh` dispatches commands, while `export_asr.py` owns the
+Python conversion and cache/validation logic. No inference stack imports PEFT.
+
+## Optional existing-export mode
+
+If a verified export is already on Studio, set `ASR_EXPORT_DIR` in `.env` and use
+the explicit override instead of automatic HF conversion:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.asr-local.yml up -d --build
+```
+
+The override sets `ASR_SOURCE=local` and mounts the source read-only. The default
+setup above has no local model bind mount and only needs `HF_TOKEN`.

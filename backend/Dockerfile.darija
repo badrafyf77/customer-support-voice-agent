@@ -1,4 +1,4 @@
-# Dependencies are installed inside images; the Studio needs only Docker/GPU support.
+# 1. Shared system dependencies. No model downloads or credentials at image build.
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -17,39 +17,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3.10 -m pip install --no-cache-dir uv==0.10.11
 WORKDIR /app
 
+# 2. Isolated pinned environments. Source changes do not invalidate these layers.
+FROM base AS prepare-deps
+COPY studio/asr-export.lock /tmp/asr-export.lock
+RUN uv venv --python /usr/bin/python3.10 /opt/darija/asr-export \
+    && uv pip sync --python /opt/darija/asr-export/bin/python /tmp/asr-export.lock
+
 FROM base AS backend-deps
 COPY studio/backend.lock /tmp/backend.lock
 RUN uv venv --python /usr/bin/python3.10 /opt/darija/backend \
     && uv pip sync --python /opt/darija/backend/bin/python /tmp/backend.lock
-
-FROM backend-deps AS backend
-COPY code/ /app/code/
-COPY studio/ /app/studio/
-RUN chmod +x /app/studio/container_entrypoint.sh
-EXPOSE 8080
-ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
-CMD ["backend"]
 
 FROM base AS vllm-deps
 COPY studio/vllm.lock /tmp/vllm.lock
 RUN uv venv --python /usr/bin/python3.10 /opt/darija/vllm \
     && uv pip sync --python /opt/darija/vllm/bin/python /tmp/vllm.lock
 
-FROM vllm-deps AS vllm
-COPY code/ /app/code/
-COPY studio/ /app/studio/
-RUN chmod +x /app/studio/container_entrypoint.sh
-ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
-CMD ["vllm"]
-
 FROM base AS silma-deps
 COPY studio/silma.lock /tmp/silma.lock
 RUN uv venv --python /usr/bin/python3.10 /opt/darija/silma \
     && uv pip sync --python /opt/darija/silma/bin/python /tmp/silma.lock
 
-FROM silma-deps AS silma
+# 3. Shared source layer, copied once and reused by every final image.
+FROM base AS source
 COPY code/ /app/code/
 COPY studio/ /app/studio/
 RUN chmod +x /app/studio/container_entrypoint.sh
+
+# 4. Final targets. Compose controls model preparation and service startup order.
+FROM prepare-deps AS prepare
+COPY --from=source /app /app
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["prepare"]
+
+FROM vllm-deps AS vllm
+COPY --from=source /app /app
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["vllm"]
+
+FROM silma-deps AS silma
+COPY --from=source /app /app
 ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
 CMD ["silma"]
+
+FROM backend-deps AS backend
+COPY --from=source /app /app
+EXPOSE 8080
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["backend"]

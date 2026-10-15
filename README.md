@@ -56,12 +56,14 @@ For a backend file-by-file architecture map, see
 ### 1. Start The Backend
 
 The default stack runs Darija chat with pinned ASR/turn, Atlas and SILMA models.
-Upload the corrected ASR export once using the [guide](backend/studio/DOCKER.md#2-upload-the-asr-export-once).
+Compose downloads the pinned Whisper base and trained Darija adapter from HF,
+merges them, and prepares verified ready-to-run CT2 files automatically. See the
+[guide](backend/studio/DOCKER.md#2-automatic-ready-to-run-asr-preparation-from-hugging-face).
 
 ```bash
 cd backend
 cp -n .env.example .env
-# Edit HF_TOKEN and ASR_EXPORT_DIR in .env.
+# Edit HF_TOKEN in .env; ASR preparation is automatic.
 docker compose up -d --build
 ```
 

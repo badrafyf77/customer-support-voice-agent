@@ -260,3 +260,17 @@ environment. This supersedes native host environments, Lightning Secrets and
 SSH tunneling as the primary setup. See backend/studio/DOCKER.md. The corrected
 ASR export still needs a one-time upload/path; other pinned models are prepared
 automatically by Compose. Live L4 acceptance remains pending.
+
+### Automatic HF ASR preparation — 15 October 2026
+
+The user requested creating ready-to-run ASR files during Docker setup rather
+than uploading the 1.6 GB export or using Modal. The default preparation container
+now downloads the exact pinned Whisper base and selected Darija adapter from HF,
+merges on CPU and converts to FP16 CTranslate2 using the original recipe's pinned
+toolchain. It checks the original expected export hashes, caches verified files,
+then prepares other pinned models before Atlas/SILMA/backend startup. Only HF_TOKEN
+is required. Local-export mode is an optional explicit Compose override.
+
+Docker stages are organized as shared system dependencies, separate dependency
+environments, shared source, and final targets; Compose declares readiness order.
+Actual Linux conversion and L4 acceptance remain unverified until the Studio run.

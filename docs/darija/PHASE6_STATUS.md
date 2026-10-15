@@ -1,5 +1,13 @@
 # Phase 6 implementation — 15 October 2026
 
+Latest setup: ready-to-run ASR is now built automatically from the pinned HF
+Whisper base plus trained Darija adapter in a CPU preparation container. No
+manual upload or Modal dependency is required. The original export recipe,
+trained-weight checks and all expected CT2 hashes are enforced; verified files
+are reused. Docker image stages and Compose ordering are separated and documented
+in [DOCKER.md](../../backend/studio/DOCKER.md). Local cache/validation/Compose tests
+pass; full Linux conversion and GPU image execution remain pending.
+
 Deployment update: the user prefers Docker Compose with `backend/.env` for
 HF_TOKEN/configuration and an exposed Lightning port used by the local frontend.
 [DOCKER.md](../../backend/studio/DOCKER.md) is now the primary guide. The default
@@ -38,13 +46,13 @@ Existing regression checks cover Arabic normalization, calibrated turn policy,
 Atlas formatting/stops, phrase ordering/tails, cancellation, stale results and
 browser reset/reconnect. Additional phase 6 checks cover measurement summaries,
 turn-boundary gap handling and owned-process shutdown.
-All 95 backend tests (including six Compose/readiness checks), frontend unit/type checks, nine production-frontend
+All 99 backend tests (including Compose/readiness and ASR export/cache checks), frontend unit/type checks, nine production-frontend
 Chromium check groups, trace privacy/restore checks and syntax checks pass locally.
 Saved scope: [phase6-verification.json](phase6-verification.json).
 
 Pending user Studio run:
 
-- Actual Linux native installs and all model loads on L4.
+- Actual Linux Docker image builds, CPU ASR export reproduction and model loads on L4.
 - Combined GPU headroom/budget adoption, recognition/language/listening review,
   acoustic interruption and sustained live-browser acceptance.
 - Measured L4 latency/memory report. No fabricated results or assumed English

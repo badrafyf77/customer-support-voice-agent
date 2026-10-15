@@ -1,7 +1,12 @@
 {
   "date": "2026-10-15",
   "scope": "Local regression and production-frontend integration with deterministic model boundaries",
-  "backend_unittest_count": 95,
+  "backend_unittest_count": 99,
+  "hf_asr_repository_contents": "pinned revision verified to contain adapter_config.json and adapter_model.safetensors",
+  "hf_asr_export_cache_and_provenance_tests": "4 passed",
+  "ct2_tokenizer_normalization": "real tokenizers 0.22.2 preserved Arabic, Latin and number token IDs",
+  "hf_asr_full_linux_conversion": "not run locally; Studio validation pending",
+  "modal_runtime_dependency": false,
   "compose_configuration_and_readiness_tests": "6 passed using Docker Compose 5.1.3",
   "docker_cuda_base_manifest": "verified linux/amd64 tag availability",
   "docker_image_builds": "not run; local Docker daemon is not running",

@@ -1,5 +1,16 @@
 name: darija-voice
 
+# Reuse stable configuration; each service below owns its command and dependencies.
+x-build: &build
+  context: .
+  dockerfile: Dockerfile.darija
+
+x-healthcheck: &healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 120
+  start_period: 60s
+
 x-environment: &environment
   DARIJA_STATE_ROOT: /opt/darija
   DARIJA_MODEL_ROOT: /models
@@ -39,32 +50,25 @@ x-service: &service
     - model_cache:/cache
 
 services:
-  # No GPU needed. Downloads exact revisions and validates the supplied ASR.
+  # 1. CPU-only: HF download -> safe adapter merge -> CT2 export -> hash checks.
   prepare-models:
     <<: *service
-    image: darija-voice-backend:local
+    image: darija-voice-prepare:local
     build:
-      context: .
-      dockerfile: Dockerfile.darija
-      target: backend
+      <<: *build
+      target: prepare
     command: [prepare]
     volumes:
       - models:/models
       - model_cache:/cache
-      - type: bind
-        source: ${ASR_EXPORT_DIR:-./models/asr-export}
-        target: /asr-export
-        read_only: true
-        bind:
-          create_host_path: false
     restart: "no"
 
+  # 2. Start Atlas before other GPU models so it can profile its memory budget.
   vllm:
     <<: *service
     image: darija-voice-vllm:local
     build:
-      context: .
-      dockerfile: Dockerfile.darija
+      <<: *build
       target: vllm
     command: [vllm]
     environment:
@@ -76,21 +80,18 @@ services:
       prepare-models:
         condition: service_completed_successfully
     healthcheck:
+      <<: *healthcheck
       test: [CMD, /opt/darija/vllm/bin/python, /app/studio/container_health.py, vllm]
-      interval: 10s
-      timeout: 5s
-      retries: 120
-      start_period: 60s
     deploy: *gpu
     shm_size: 4gb
     restart: unless-stopped
 
+  # 3. Load/cache the selected voice only after Atlas reports ready.
   silma:
     <<: *service
     image: darija-voice-silma:local
     build:
-      context: .
-      dockerfile: Dockerfile.darija
+      <<: *build
       target: silma
     command: [silma]
     environment:
@@ -100,21 +101,18 @@ services:
       vllm:
         condition: service_healthy
     healthcheck:
+      <<: *healthcheck
       test: [CMD, /opt/darija/silma/bin/python, /app/studio/container_health.py, silma]
-      interval: 10s
-      timeout: 5s
-      retries: 120
-      start_period: 60s
     deploy: *gpu
     shm_size: 2gb
     restart: unless-stopped
 
+  # 4. Warm the one voice runtime and publish only its HTTP/WebSocket port.
   app:
     <<: *service
     image: darija-voice-backend:local
     build:
-      context: .
-      dockerfile: Dockerfile.darija
+      <<: *build
       target: backend
     command: [backend]
     environment:
@@ -126,11 +124,8 @@ services:
       silma:
         condition: service_healthy
     healthcheck:
+      <<: *healthcheck
       test: [CMD, /opt/darija/backend/bin/python, /app/studio/container_health.py, backend]
-      interval: 10s
-      timeout: 5s
-      retries: 120
-      start_period: 60s
     deploy: *gpu
     shm_size: 2gb
     restart: unless-stopped
