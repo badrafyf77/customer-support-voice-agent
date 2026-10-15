@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "7adb0565186569420458bb32500e072f62c832ae",
+  "models": {
+    "stt": {
+      "repo_id": "afyfbadreddine77/whisper-large-v3-turbo-darija",
+      "revision": "e9ff459f2f5823d4f9093db8854c691eb78045d3",
+      "base_model": "openai/whisper-large-v3-turbo",
+      "base_revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+      "directory": "asr",
+      "format": "ctranslate2-float16",
+      "source": "modal volume darija-turn-detection/user-asr-turbo-e9ff459f2f58/ctranslate2",
+      "files": {
+        "config.json": {
+          "sha256": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e",
+          "bytes": 2263
+        },
+        "model.bin": {
+          "sha256": "c130a5ee127bda0df5088ba815bddbe34b02f244903ab4da13a3460b28e49646",
+          "bytes": 1617884929
+        },
+        "preprocessor_config.json": {
+          "sha256": "5edb479d77c717d4a62952075bfe411336340759275c6f7a847dedea81333898",
+          "bytes": 356
+        },
+        "tokenizer.json": {
+          "sha256": "e2d42779c1ceab7e05c8760bbd9e2d4d3c08dbc3f5d4995363214b3ed3d14c45",
+          "bytes": 2481354
+        },
+        "vocabulary.json": {
+          "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1",
+          "bytes": 1068114
+        }
+      }
+    },
+    "turn": {
+      "repo_id": "afyfbadreddine77/darija-turn-detection",
+      "revision": "a6b5bc2249d83bd0d05c5c4c3d8f5e1eafe204e4",
+      "directory": "turn",
+      "files": {
+        "config.json": {
+          "sha256": "5966aa1a682dbefb253df73ba9459b775d42db940e7c5414874d047273707372"
+        },
+        "model.safetensors": {
+          "sha256": "6c794a55db20dff29d2d7d3b9f6dffdc93c69b131b8ebd35fdf67375bb1e8fab"
+        },
+        "special_tokens_map.json": {
+          "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a"
+        },
+        "tokenizer.json": {
+          "sha256": "bdf6a34bc747a9c5bf3412da6864f54c6b8d0e55a62f74ef15d24bf4d2f83bd5"
+        },
+        "tokenizer_config.json": {
+          "sha256": "de28dac105fb41c79b95c05feb04f5916d564f3c2de8fdbc6c9daa4978f74a65"
+        },
+        "vocab.txt": {
+          "sha256": "fe0fda7c425b48c516fc8f160d594c8022a0808447475c1a7c6d6479763f310c"
+        }
+      }
+    },
+    "llm": {
+      "repo_id": "MBZUAI-Paris/Atlas-Chat-2B",
+      "revision": "a6244a4c50bc32b65c6c8dc4dc1dab218b580088",
+      "directory": "atlas",
+      "files": {
+        "config.json": {
+          "sha256": "32e408423763a5060f9aa5701099382fd56f18d1bd3bb0ddc200581c52ced0e8",
+          "bytes": 886
+        },
+        "generation_config.json": {
+          "sha256": "8a080dedc8ee338fdab755a8c0641abaecb4759f8a5dd82ce279395db83cab2a",
+          "bytes": 187
+        },
+        "tokenizer.json": {
+          "sha256": "3f289bc05132635a8bc7aca7aa21255efd5e18f3710f43e3cdb96bcd41be4922",
+          "bytes": 17525357
+        },
+        "tokenizer.model": {
+          "sha256": "61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2",
+          "bytes": 4241003
+        },
+        "tokenizer_config.json": {
+          "sha256": "cb32b7929c62608d46572e813112b3ad8a841fb98fdd6a4da8559e368a951c89",
+          "bytes": 46996
+        },
+        "special_tokens_map.json": {
+          "sha256": "baec30ea10906f16adb8c18af7a34023002c1746542612b8b41c9f09e1351351",
+          "bytes": 636
+        },
+        "model.safetensors.index.json": {
+          "sha256": "ada0043f3e3b2e5ab2f445cad9c0fbbf9d91ad444675e6a82b822591c63abf5a",
+          "bytes": 24223
+        },
+        "model-00001-of-00002.safetensors": {},
+        "model-00002-of-00002.safetensors": {}
+      }
+    },
+    "tts": {
+      "repo_id": "afyfbadreddine77/silma-tts-darija",
+      "revision": "2bac42dba12aba0d988ee5d5f8aa8d8b75397183",
+      "directory": "silma",
+      "files": {
+        "config.yaml": {
+          "bytes": 529,
+          "sha256": "515126996340f62ac106e1ad76b37356cfde685c35d98778474b4b42af563eab"
+        },
+        "vocab.txt": {
+          "bytes": 36357,
+          "sha256": "5c2ffc48802a52bbdf715dacf1d6519d3fee96e391aef690261963a692b8e661"
+        },
+        "model.pt": {
+          "bytes": 1301610994,
+          "sha256": "5d646c572742340fd0f954bac43f113560474ef52b2f8684902c56656a8cd9b9"
+        }
+      }
+    },
+    "vocoder": {
+      "repo_id": "charactr/vocos-mel-24khz",
+      "revision": "0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21",
+      "directory": "vocos",
+      "files": {
+        "config.yaml": {
+          "sha256": "da9033922f969a47f0c160010226919e59f27761fd5066f3828d46de6650b0fc",
+          "bytes": 461
+        },
+        "pytorch_model.bin": {
+          "sha256": "97ec976ad1fd67a33ab2682d29c0ac7df85234fae875aefcc5fb215681a91b2a",
+          "bytes": 54365991
+        }
+      }
+    }
+  }
+}

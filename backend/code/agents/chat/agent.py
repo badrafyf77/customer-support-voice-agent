@@ -20,6 +20,17 @@ Do not mention exams, grading, attempts, rubrics, or authentication.
 """.strip()
 
 
+DARIJA_SYSTEM_PROMPT = """
+نتا مساعد صوتي كتعاون المستخدم. جاوب بالدارجة المغربية بالحروف العربية.
+خلي الجواب قصير وطبيعي وساهل يتقال، إلا طلب المستخدم التفاصيل.
+إلا ما فهمتيش ولا ما عندكش المعلومة، قولها بوضوح وسول سؤال قصير باش توضح.
+ما تخترعش معلومات. حافظ على الأسامي الأجنبية وأرقام التليفون وأرقام الطلبات
+والمقادير كيف ما عطاهم المستخدم، بلا ما تبدل الأرقام لحروف.
+إلا استعمل المستخدم كلمات بالفرنسية ولا بالإنجليزية، بقى جاوب بالدارجة
+وبلا ما تقلب الجواب للفرنسية ولا للإنجليزية. ما تستعملش علامات التنسيق ولا تسميات الأدوار.
+""".strip()
+
+
 @dataclass(frozen=True)
 class PlannedChatTurn:
     kind: str
@@ -36,9 +47,18 @@ class ChatAgentBrain(BaseAgent):
     system_prompt = SYSTEM_PROMPT
     conversation_history: list[dict[str, str]] = []
 
-    def __init__(self) -> None:
+    def __init__(self, profile: str = "english") -> None:
+        if profile not in {"english", "darija"}:
+            raise ValueError("Unknown chat voice profile")
+        self.system_prompt = DARIJA_SYSTEM_PROMPT if profile == "darija" else SYSTEM_PROMPT
+        self.conversation_history = []
         self._lock = Lock()
         self._pending_user_turn = ""
+
+    def reset_session_state(self):
+        with self._lock:
+            self._pending_user_turn = ""
+        self.conversation_history = []
 
     @property
     def initial_state(self) -> dict[str, Any]:
@@ -108,5 +128,5 @@ class ChatAgentBrain(BaseAgent):
 
 
 def build_chat_agent(context: dict[str, Any] | None = None) -> tuple[ChatAgentBrain, dict[str, Any]]:
-    brain = ChatAgentBrain()
+    brain = ChatAgentBrain(profile=(context or {}).get("profile", "english"))
     return brain, brain.initial_state

@@ -147,8 +147,33 @@ def _apply_env_overrides(config: dict[str, Any], agent_name: str) -> dict[str, A
     return merged
 
 
-def load_agent_config(agent_name: str) -> dict[str, Any]:
+def load_agent_config(agent_name: str, profile: str = "english") -> dict[str, Any]:
+    if agent_name not in {"chat", "exam"}:
+        raise ValueError(f"Unsupported VOICE_AGENT: {agent_name!r}; choose chat or exam.")
+    if profile not in {"english", "darija"}:
+        raise ValueError(f"Unsupported VOICE_PROFILE: {profile!r}; choose english or darija.")
+    if profile == "darija" and agent_name != "chat":
+        raise ValueError("The Darija profile supports chat only.")
     global_config = _load_yaml_file(CONFIG_ROOT / "global.yaml")
     agent_config = _load_yaml_file(CODE_ROOT / "agents" / agent_name / "config.yaml")
     merged = _merge_config(global_config, agent_config)
+    if profile != "english":
+        merged = _merge_config(merged, _load_yaml_file(
+            CODE_ROOT / "agents" / agent_name / f"config.{profile}.yaml"
+        ))
+    # Preserve existing deployment variables when applying YAML at startup.
+    for key, env_name in {
+        "stt_model": "STT_MODEL",
+        "stt_realtime_model": "STT_REALTIME_MODEL",
+    }.items():
+        if env_name in os.environ:
+            merged[key] = os.environ[env_name]
     return _apply_env_overrides(merged, agent_name)
+
+
+def load_runtime_config() -> tuple[str, str, dict[str, Any]]:
+    """Select the profile once, before creating shared warmed runtimes."""
+    load_env_file_if_available()
+    agent = (get_env("VOICE_AGENT", "chat") or "chat").strip().lower()
+    profile = (get_env("VOICE_PROFILE", "english") or "english").strip().lower()
+    return agent, profile, load_agent_config(agent, profile)

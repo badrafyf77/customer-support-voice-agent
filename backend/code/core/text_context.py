@@ -12,7 +12,7 @@ class TextContext:
     adhere to specified length constraints, and contain a minimum number
     of alphanumeric characters.
     """
-    def __init__(self, split_tokens: Optional[Set[str]] = None) -> None:
+    def __init__(self, split_tokens: Optional[Set[str]] = None, protect_identifiers: bool = False) -> None:
         """
         Initializes the TextContext processor.
 
@@ -23,9 +23,10 @@ class TextContext:
                           potential end-of-context marker. If None, a default set
                           of punctuation and whitespace characters is used.
         """
+        self.protect_identifiers = protect_identifiers
         if split_tokens is None:
             # Using a more explicit variable name internally for clarity
-            default_splits: Set[str] = {".", "!", "?", ",", ";", ":", "\n", "-", "。", "、"}
+            default_splits: Set[str] = {".", "!", "?", ",", ";", ":", "\n", "-", "。", "、", "؟", "،", "؛"}
             self.split_tokens: Set[str] = default_splits
         else:
             self.split_tokens: Set[str] = set(split_tokens)
@@ -57,6 +58,12 @@ class TextContext:
 
         for i in range(1, min(len(txt), max_len) + 1):
             char = txt[i - 1]
+            if self.protect_identifiers and char in {".", "-"}:
+                if i == len(txt):
+                    # Await the next token (or the pipeline's EOF flush).
+                    continue
+                if i > 1 and txt[i - 2].isalnum() and txt[i].isalnum():
+                    continue
             if char.isalnum():
                 alnum_count += 1
 

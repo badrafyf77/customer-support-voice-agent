@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Darija speech preview</title>
+<style>
+body{font:17px system-ui;max-width:760px;margin:48px auto;padding:0 24px;background:#f5f3ee;color:#242b28}
+textarea{box-sizing:border-box;width:100%;padding:16px;font:22px system-ui;border:1px solid #b9c4bd;border-radius:8px}
+button{font:inherit;padding:12px 22px;margin:16px 10px 16px 0;cursor:pointer;border-radius:8px;border:1px solid #69776e}
+button:first-of-type{background:#245b46;color:white}#status{min-height:2em}small{color:#57635b}
+</style>
+<h1>Darija speech preview</h1>
+<p>Type a sentence, listen, and stop it whenever you want.</p>
+<textarea id="text" dir="auto" rows="5" maxlength="2000">سلام، كيفاش نقدر نعاونك اليوم؟</textarea>
+<button id="speak" disabled>Speak</button><button id="stop">Stop</button>
+<p id="answer" dir="auto" aria-live="polite"></p>
+<p id="status">Connecting…</p><small id="voice"></small>
+<script>
+let socket, context, player, generation, requestId, audioReady;
+const status = document.querySelector('#status');
+async function audio() {
+  if (!audioReady) audioReady = (async () => {
+    context = new AudioContext({sampleRate:24000});
+    await context.audioWorklet.addModule('/static/ttsPlaybackProcessor.js');
+    player = new AudioWorkletNode(context,'tts-playback-processor');
+    player.connect(context.destination);
+  })();
+  await audioReady; await context.resume();
+}
+function clear() { generation = null; player?.port.postMessage({type:'clear'}); }
+socket = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/tts');
+socket.onmessage = ({data}) => {
+  const message = JSON.parse(data);
+  if (message.type === 'status') {
+    if(message.request_id && message.request_id!==requestId)return;
+    status.textContent = message.message || message.status;
+    if (message.status === 'ready') {
+      document.querySelector('#speak').disabled = false;
+      if (message.voice.mode === 'chat') {
+        document.title = document.querySelector('h1').textContent = 'Darija chat preview';
+        document.querySelector('h1+p').textContent = 'Type a message, listen to the streamed reply, and interrupt it with Stop.';
+        document.querySelector('#speak').textContent = 'Send';
+        document.querySelector('#text').value = 'سلام، بغيت نسولك على الطلب ديالي.';
+      }
+      document.querySelector('#voice').textContent =
+        'Voice '+message.voice.voice_id+' · '+message.voice.variant;
+    }
+  } else if (message.type === 'tts_begin' && message.request_id === requestId) {
+    generation = message.generation_id; status.textContent = 'Preparing speech…';
+  } else if (message.type === 'assistant_partial' && message.request_id === requestId && message.generation_id === generation) {
+    document.querySelector('#answer').textContent = message.content;
+  } else if (message.type === 'tts_chunk'  && message.request_id === requestId && message.generation_id === generation && player) {
+    const bytes = Uint8Array.from(atob(message.content), c=>c.charCodeAt(0));
+    player.port.postMessage(new Int16Array(bytes.buffer)); status.textContent = 'Playing';
+  } else if (message.type === 'stop_tts' && (!message.request_id || message.request_id === requestId)) {
+    clear();
+  } else if (message.type === 'tts_end' && message.generation_id === generation) {
+    status.textContent = message.completed ? 'Speech generated' : 'Stopped';
+  }
+};
+socket.onclose = () => { requestId=null; clear(); status.textContent='Disconnected'; document.querySelector('#speak').disabled=true; };
+document.querySelector('#speak').onclick = async () => {
+  const id = crypto.randomUUID(); requestId=id; clear();
+  document.querySelector('#answer').textContent = '';
+  try { await audio(); } catch { status.textContent='Audio playback could not start'; return; }
+  if(requestId!==id || socket.readyState!==WebSocket.OPEN)return;
+  socket.send(JSON.stringify({type:'synthesize',content:document.querySelector('#text').value,request_id:id}));
+};
+document.querySelector('#stop').onclick = () => {
+  requestId=null; clear(); status.textContent='Stopped';
+  if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'stop_tts'}));
+};
+</script>
+</html>

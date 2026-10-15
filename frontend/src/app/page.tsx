@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PlaybackGeneration } from "@/lib/generation";
 
 const DEFAULT_VOICE_SERVER_URL =
   process.env.NEXT_PUBLIC_VOICE_SERVER_URL || "http://localhost:8080";
@@ -15,6 +16,7 @@ type TranscriptMessage = {
   role: "user" | "assistant";
   content: string;
   type: "partial" | "final";
+  generationId?: number;
   finishComplete?: boolean;
   success?: boolean;
   error?: string;
@@ -22,6 +24,7 @@ type TranscriptMessage = {
 
 type WebSocketPayload = {
   type: string;
+  generation_id?: number;
   status?: string;
   message?: string;
   content?: string;
@@ -101,11 +104,13 @@ function upsertUserMessage(
   return updatedMessages;
 }
 
-function waitForReady(isReadyRef: { current: boolean }) {
+function waitForReady(isReadyRef: { current: boolean }, cancelled: () => boolean, failure: () => string) {
   return new Promise<void>((resolve, reject) => {
     const startedAt = Date.now();
 
     const check = () => {
+      if (failure()) { reject(new Error(failure())); return; }
+      if (cancelled()) { reject(new Error("Connection cancelled.")); return; }
       if (isReadyRef.current) {
         resolve();
         return;
@@ -132,6 +137,9 @@ function useVoiceSocket(serverUrl: string) {
   const [statusMessage, setStatusMessage] = useState("");
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+  const connectionEpochRef = useRef(0);
+  const generationRef = useRef(new PlaybackGeneration());
 
   const socketRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -143,25 +151,30 @@ function useVoiceSocket(serverUrl: string) {
       return;
     }
 
+    const epoch = connectionEpochRef.current;
     const audioContext = new AudioContext({ sampleRate: 24_000 });
+    audioContextRef.current = audioContext;
     await audioContext.audioWorklet.addModule(
       "/static/ttsPlaybackProcessor.js",
     );
+    if (connectionEpochRef.current !== epoch) { await audioContext.close().catch(() => {}); throw new Error("Connection cancelled."); }
     await audioContext.resume();
+    if (connectionEpochRef.current !== epoch) { await audioContext.close().catch(() => {}); throw new Error("Connection cancelled."); }
 
     const ttsWorkletNode = new AudioWorkletNode(
       audioContext,
       "tts-playback-processor",
     );
     ttsWorkletNode.port.onmessage = ({ data }) => {
+      if (ttsWorkletNodeRef.current !== ttsWorkletNode) return;
       if (data.type === "ttsPlaybackStarted") {
         setIsTtsPlaying(true);
-        socketRef.current?.send(JSON.stringify({ type: "tts_start" }));
+        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "tts_start" }));
       }
 
       if (data.type === "ttsPlaybackStopped") {
         setIsTtsPlaying(false);
-        socketRef.current?.send(JSON.stringify({ type: "tts_stop" }));
+        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "tts_stop" }));
       }
     };
 
@@ -171,11 +184,13 @@ function useVoiceSocket(serverUrl: string) {
   }, []);
 
   const disconnect = useCallback(() => {
+    connectionEpochRef.current += 1;
     connectionPromiseRef.current = null;
 
     socketRef.current?.close();
     socketRef.current = null;
 
+    ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
     ttsWorkletNodeRef.current?.disconnect();
     ttsWorkletNodeRef.current = null;
 
@@ -190,11 +205,19 @@ function useVoiceSocket(serverUrl: string) {
   }, []);
 
   const handleJsonMessage = useCallback((payload: WebSocketPayload) => {
+    if (["tts_chunk", "assistant_partial", "partial_assistant_answer", "assistant_sentence"].includes(payload.type)
+        && !generationRef.current.accept(payload.generation_id)) return;
     switch (payload.type) {
       case "status":
         setServerStatus(payload.status || "");
         setStatusMessage(payload.message || "");
         setIsReady(payload.status === "ready");
+        if (payload.status === "error" || payload.status === "busy") {
+          setConnectionError(payload.message || "The voice service is unavailable.");
+          generationRef.current.stop();
+          ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
+          setIsTtsPlaying(false);
+        }
         break;
 
       case "partial_user_request":
@@ -223,13 +246,14 @@ function useVoiceSocket(serverUrl: string) {
 
           const lastAssistantIndex = previousMessages.findLastIndex(
             (message) =>
-              message.role === "assistant" && message.type === "partial",
+              message.role === "assistant" && message.type === "partial" &&
+              (payload.generation_id === undefined || message.generationId === payload.generation_id),
           );
 
           if (lastAssistantIndex === -1) {
             return [
               ...previousMessages,
-              createTranscriptMessage("assistant", payload.content, "partial"),
+              { ...createTranscriptMessage("assistant", payload.content, "partial"), generationId: payload.generation_id },
             ];
           }
 
@@ -256,13 +280,14 @@ function useVoiceSocket(serverUrl: string) {
 
           const lastAssistantIndex = previousMessages.findLastIndex(
             (message) =>
-              message.role === "assistant" && message.type === "partial",
+              message.role === "assistant" && message.type === "partial" &&
+              (payload.generation_id === undefined || message.generationId === payload.generation_id),
           );
 
           if (lastAssistantIndex === -1) {
             return [
               ...previousMessages,
-              createTranscriptMessage("assistant", payload.content, "final"),
+              { ...createTranscriptMessage("assistant", payload.content, "final"), generationId: payload.generation_id },
             ];
           }
 
@@ -286,6 +311,7 @@ function useVoiceSocket(serverUrl: string) {
 
       case "tts_interruption":
       case "stop_tts":
+        if (!generationRef.current.stop(payload.generation_id)) break;
         ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
         setIsTtsPlaying(false);
         break;
@@ -312,88 +338,58 @@ function useVoiceSocket(serverUrl: string) {
   }, []);
 
   const connect = useCallback(async () => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      return;
-    }
-
-    if (connectionPromiseRef.current) {
-      return connectionPromiseRef.current;
-    }
-
-    await initializeAudioPlayback();
-
-    connectionPromiseRef.current = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const socket = new WebSocket(buildWebSocketUrl(serverUrl));
-
-      const timeoutId = window.setTimeout(() => {
-        socket.close();
-        rejectOnce(
-          new Error("Timed out while connecting to the voice chat server."),
-        );
-      }, SOCKET_CONNECT_TIMEOUT_MS);
-
-      const cleanup = () => {
-        window.clearTimeout(timeoutId);
-        connectionPromiseRef.current = null;
-      };
-
-      const resolveOnce = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        resolve();
-      };
-
-      const rejectOnce = (error: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-
-      socket.onopen = () => {
-        setIsConnected(true);
-        setIsReady(false);
-        setStatusMessage("Connecting...");
-        resolveOnce();
-      };
-
-      socket.onmessage = (event) => {
-        if (typeof event.data !== "string") {
-          return;
-        }
-
-        try {
-          handleJsonMessage(JSON.parse(event.data) as WebSocketPayload);
-        } catch (error) {
-          console.error("Error parsing voice-agent socket message:", error);
-        }
-      };
-
-      socket.onclose = () => {
-        setIsConnected(false);
-        setIsReady(false);
-        setStatusMessage("");
-
-        if (!settled) {
-          rejectOnce(new Error("The voice chat server closed the connection."));
-        }
-      };
-
-      socket.onerror = () => {
-        setIsConnected(false);
-        rejectOnce(new Error("Unable to connect to the voice chat server."));
-      };
-
-      socketRef.current = socket;
-    });
-
-    return connectionPromiseRef.current;
+    if (socketRef.current?.readyState === WebSocket.OPEN) return;
+    if (connectionPromiseRef.current) return connectionPromiseRef.current;
+    const epoch = ++connectionEpochRef.current;
+    setConnectionError("");
+    setMessages([]);
+    generationRef.current = new PlaybackGeneration();
+    const pending = (async () => {
+      await initializeAudioPlayback();
+      if (connectionEpochRef.current !== epoch) throw new Error("Connection cancelled.");
+      await new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(buildWebSocketUrl(serverUrl));
+        socketRef.current = socket;
+        let settled = false;
+        const current = () => socketRef.current === socket && connectionEpochRef.current === epoch;
+        const finish = (error?: Error) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          if (error) reject(error); else resolve();
+        };
+        const timeoutId = window.setTimeout(() => {
+          finish(new Error("Timed out while connecting to the voice chat server."));
+          socket.close();
+        }, SOCKET_CONNECT_TIMEOUT_MS);
+        socket.onopen = () => {
+          if (!current()) { socket.close(); finish(new Error("Connection cancelled.")); return; }
+          setIsConnected(true); setIsReady(false); setStatusMessage("Connecting..."); finish();
+        };
+        socket.onmessage = (event) => {
+          if (!current() || typeof event.data !== "string") return;
+          try { handleJsonMessage(JSON.parse(event.data) as WebSocketPayload); }
+          catch (error) { console.error("Invalid voice-agent message:", error); }
+        };
+        socket.onclose = () => {
+          finish(new Error("The voice chat server closed the connection."));
+          if (!current()) return;
+          socketRef.current = null;
+          generationRef.current.stop();
+          ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
+          setIsConnected(false); setIsReady(false); setIsTtsPlaying(false);
+          setStatusMessage("Disconnected");
+          setConnectionError(previous => previous || "The voice connection closed. Start again to reconnect.");
+        };
+        socket.onerror = () => {
+          if (current()) setConnectionError("Unable to connect to the voice chat server.");
+          finish(new Error("Unable to connect to the voice chat server."));
+        };
+      });
+    })();
+    connectionPromiseRef.current = pending;
+    try { await pending; }
+    finally { if (connectionPromiseRef.current === pending) connectionPromiseRef.current = null; }
   }, [handleJsonMessage, initializeAudioPlayback, serverUrl]);
 
   const sendAudioData = useCallback((audioBuffer: ArrayBuffer) => {
@@ -410,6 +406,9 @@ function useVoiceSocket(serverUrl: string) {
 
   const clearHistory = useCallback(() => {
     setMessages([]);
+    generationRef.current.stop();
+    ttsWorkletNodeRef.current?.port.postMessage({ type: "clear" });
+    setIsTtsPlaying(false);
     sendMessage({ type: "clear_history" });
   }, [sendMessage]);
 
@@ -421,6 +420,7 @@ function useVoiceSocket(serverUrl: string) {
   useEffect(() => disconnect, [disconnect]);
 
   return {
+    connectionError,
     isConnected,
     isReady,
     serverStatus,
@@ -440,6 +440,7 @@ function useAudioCapture(
   getTtsPlayingState: () => boolean,
 ) {
   const [isCapturing, setIsCapturing] = useState(false);
+  const captureEpochRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -498,6 +499,7 @@ function useAudioCapture(
   }, [flushBatch]);
 
   const startCapture = useCallback(async () => {
+    const epoch = ++captureEpochRef.current;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         sampleRate: { ideal: 48_000 },
@@ -507,17 +509,22 @@ function useAudioCapture(
       },
     });
 
+    if (epoch !== captureEpochRef.current) { stream.getTracks().forEach(track => track.stop()); return false; }
     streamRef.current = stream;
 
     const audioContext = new AudioContext({ sampleRate: 48_000 });
+    audioContextRef.current = audioContext;
     await audioContext.audioWorklet.addModule("/static/pcmWorkletProcessor.js");
+    if (epoch !== captureEpochRef.current) { await audioContext.close().catch(() => {}); return false; }
     await audioContext.resume();
+    if (epoch !== captureEpochRef.current) { await audioContext.close().catch(() => {}); return false; }
 
     const workletNode = new AudioWorkletNode(
       audioContext,
       "pcm-worklet-processor",
     );
     workletNode.port.onmessage = ({ data }) => {
+      if (epoch !== captureEpochRef.current) return;
       const incoming = new Int16Array(data);
       let readOffset = 0;
 
@@ -546,9 +553,11 @@ function useAudioCapture(
     audioContextRef.current = audioContext;
     workletNodeRef.current = workletNode;
     setIsCapturing(true);
+    return true;
   }, [flushBatch, initializeBatch]);
 
   const stopCapture = useCallback(() => {
+    captureEpochRef.current += 1;
     flushRemainder();
 
     workletNodeRef.current?.disconnect();
@@ -562,6 +571,8 @@ function useAudioCapture(
 
     setIsCapturing(false);
   }, [flushRemainder]);
+
+  useEffect(() => stopCapture, [stopCapture]);
 
   return {
     isCapturing,
@@ -581,6 +592,8 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const isReadyRef = useRef(false);
+  const startEpochRef = useRef(0);
+  const connectionErrorRef = useRef("");
   const isTtsPlayingRef = useRef(false);
 
   useEffect(() => {
@@ -589,6 +602,7 @@ export default function Home() {
   }, []);
 
   const {
+    connectionError,
     isConnected,
     isReady,
     serverStatus,
@@ -602,10 +616,14 @@ export default function Home() {
     isTtsPlaying,
   } = useVoiceSocket(serverUrl);
 
-  const { startCapture, stopCapture } = useAudioCapture(
-    sendAudioData,
-    () => isTtsPlayingRef.current,
-  );
+  const getTtsPlayingState = useCallback(() => isTtsPlayingRef.current, []);
+  const { startCapture, stopCapture } = useAudioCapture(sendAudioData, getTtsPlayingState);
+
+  useEffect(() => {
+    connectionErrorRef.current = connectionError;
+    if (!isConnected) { stopCapture(); setIsRecording(false); }
+    if (connectionError) { stopCapture(); setIsRecording(false); setErrorMessage(connectionError); }
+  }, [isConnected, connectionError, stopCapture]);
 
   useEffect(() => {
     isReadyRef.current = isReady;
@@ -634,6 +652,7 @@ export default function Home() {
   }, [messages, stopCapture]);
 
   const stopSession = useCallback(() => {
+    startEpochRef.current += 1;
     stopTts();
     stopCapture();
     disconnect();
@@ -642,15 +661,21 @@ export default function Home() {
   }, [disconnect, stopCapture, stopTts]);
 
   const startSession = useCallback(async () => {
+    const epoch = ++startEpochRef.current;
+    isReadyRef.current = false;
+    connectionErrorRef.current = "";
     setErrorMessage("");
     setIsStarting(true);
 
     try {
       await connect();
-      await waitForReady(isReadyRef);
-      await startCapture();
-      setIsRecording(true);
+      if (epoch !== startEpochRef.current) return;
+      await waitForReady(isReadyRef, () => epoch !== startEpochRef.current, () => connectionErrorRef.current);
+      if (epoch !== startEpochRef.current) return;
+      const started = await startCapture();
+      if (epoch === startEpochRef.current && started) setIsRecording(true);
     } catch (error) {
+      if (epoch !== startEpochRef.current) return;
       stopSession();
       setErrorMessage(
         error instanceof Error
@@ -658,7 +683,7 @@ export default function Home() {
           : "Could not start the voice agent.",
       );
     } finally {
-      setIsStarting(false);
+      if (epoch === startEpochRef.current) setIsStarting(false);
     }
   }, [connect, startCapture, stopSession]);
 
@@ -703,7 +728,7 @@ export default function Home() {
           </label>
 
           {errorMessage ? (
-            <div className="error-box">{errorMessage}</div>
+            <div className="error-box" role="alert">{errorMessage}</div>
           ) : null}
 
           <div className="button-grid">
@@ -715,7 +740,7 @@ export default function Home() {
             >
               {isStarting ? "Starting..." : "Start"}
             </button>
-            <button type="button" onClick={stopSession} disabled={!isConnected}>
+            <button type="button" onClick={stopSession} disabled={!isConnected && !isStarting}>
               Stop
             </button>
             <button
@@ -752,7 +777,7 @@ export default function Home() {
                   <div className="message-label">
                     {transcriptLabel(message)}
                   </div>
-                  <p className="message-content">{message.content}</p>
+                  <p className="message-content" dir="auto">{message.content}</p>
                 </article>
               ))
             )}

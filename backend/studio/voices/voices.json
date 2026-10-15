@@ -1,0 +1,20 @@
+{
+  "voices": {
+    "voice0": {
+      "audio": "voice0.wav",
+      "reference_text": "فوقت الفراغ ديالها كتقرا كتوبة ديال الطبخ",
+      "speaker_id": "spk0067",
+      "reference_id": "val-00000-of-00001-00307",
+      "sha256": "b7dfdc03967181025614a2dc3f4e93921010c557edd9936de3b7cfcf096db1b6",
+      "source": "silma-tts/research/full_evaluation/COMPLETE.json"
+    },
+    "voice1": {
+      "audio": "voice1.wav",
+      "reference_text": "وهادشي اللي كاين والله يجعلها معرفة دايمة ان شاء الله ناخد من عندو جميع الانواع ان شاء الله هادشي اللي كاين",
+      "speaker_id": "spk0552",
+      "reference_id": "train-00026-of-00039-01293",
+      "sha256": "8c04ccccbb39b35561431424b77ccf1c95ab6275a94d64877b0ebe08a2424245",
+      "source": "silma-tts/research/full_evaluation/COMPLETE.json"
+    }
+  }
+}

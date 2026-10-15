@@ -26,6 +26,7 @@ class VoiceRuntime:
             pipeline_config: dict,
             language: str,
             tts_engine: str,
+            stt_config: dict | None = None,
         ) -> None:
         self.runtime_id = runtime_id
         pipeline_manager = None
@@ -37,6 +38,7 @@ class VoiceRuntime:
                 language,
                 is_orpheus=tts_engine == "orpheus",
                 pipeline_latency=pipeline_manager.full_output_pipeline_latency / 1000,
+                stt_config=stt_config,
             )
         except Exception:
             if audio_processor is not None:
@@ -81,6 +83,9 @@ class VoiceRuntime:
         """
         Clears session-specific state so this runtime can be safely reused.
         """
+        task = getattr(self.audio_processor, "transcription_task", None)
+        if getattr(self.audio_processor, "_transcription_failed", False) or (task is not None and task.done()):
+            raise RuntimeError("Cannot reuse a runtime whose STT worker has stopped")
         self.pipeline_manager.reset_session_state()
         self.audio_processor.reset_session_state(clear_callbacks=True)
 
@@ -110,6 +115,7 @@ class VoiceRuntimeManager:
             pipeline_config: dict,
             language: str,
             tts_engine: str,
+            stt_config: dict | None = None,
         ) -> None:
         requested_min_warm = max(0, min_warm)
         requested_max_concurrent = max(1, max_concurrent)
@@ -125,6 +131,7 @@ class VoiceRuntimeManager:
         self.min_warm = requested_min_warm
         self.max_concurrent = requested_max_concurrent
         self.idle_ttl_seconds = max(0.0, idle_ttl_seconds)
+        self.stt_config = dict(stt_config or {})
         self.pipeline_config = dict(pipeline_config)
         self.language = language
         self.tts_engine = tts_engine
@@ -175,6 +182,7 @@ class VoiceRuntimeManager:
             pipeline_config=self.pipeline_config,
             language=self.language,
             tts_engine=self.tts_engine,
+            stt_config=self.stt_config,
         )
 
     def _shutdown_runtime_safely(self, runtime: VoiceRuntime, reason: str) -> None:

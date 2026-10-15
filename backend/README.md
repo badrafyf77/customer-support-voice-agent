@@ -7,6 +7,14 @@ back to the client, and exposes a few support endpoints.
 This README stays project-level and agent-neutral. Agent-specific behavior lives
 inside each folder under [`code/agents`](./code/agents).
 
+## Darija deployment
+
+For the Lightning L4 backend and local frontend, follow
+[studio/RUNBOOK.md](studio/RUNBOOK.md). It covers the Darija branch, three isolated
+environments, pinned model preparation, the selected voice1/main checkpoint,
+SSH tunneling and live measurement. GPU tuning/acceptance remain pending a Studio
+run; use the native Studio launchers instead of the legacy Docker stack below.
+
 ## Runtime Flow
 
 ```text
@@ -116,6 +124,19 @@ To add a new agent:
 | `exam` | [`code/agents/exam`](./code/agents/exam) | Oral exam flow backed by exam context. |
 
 ## Configuration
+
+For the Darija phase 1 setup, pinned model preparation, isolated Lightning L4
+environments, and SSH tunnel instructions, see [studio/README.md](./studio/README.md).
+Select startup with `VOICE_AGENT=chat|exam` and
+`VOICE_PROFILE=english|darija`. The default is chat/english. The Darija preparation
+profile now loads the corrected ASR and calibrated CPU turn detector.
+[Phase 4 configuration and replay instructions](studio/STT.md) describe the
+unchanged dynamic timing and the deferred Studio checks.
+[Phase 5 browser checks and Studio instructions](studio/BROWSER.md) cover the
+production microphone UI and session lifecycle.
+[Phase 3 typed Atlas/SILMA chat](studio/ATLAS.md) is also available. The
+[SILMA service and typed preview](./studio/SILMA.md) are available for phase 2,
+using the user's selected voice1 + main checkpoint.
 
 Copy [`.env.example`](./.env.example) to `.env`.
 

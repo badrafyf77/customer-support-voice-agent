@@ -49,3 +49,12 @@
 
 #claude files
 **/.claude
+
+# Studio environments, model artifacts, and generated measurement logs
+backend/studio/.runtime/
+backend/studio/.models/
+backend/studio/.cache/
+
+# Browser test artifacts and TypeScript incremental cache
+frontend/tests/.artifacts/
+frontend/tsconfig.tsbuildinfo

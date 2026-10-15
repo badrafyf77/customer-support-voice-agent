@@ -9,7 +9,6 @@ from starlette.responses import JSONResponse
 
 from agents.chat.agent import build_chat_agent
 from agents.exam.agent import build_exam_agent
-from core.config import load_agent_config
 from core.logsetup import setup_logging
 from core.session import lifespan, run_session
 from services import database
@@ -17,10 +16,7 @@ from services import database
 setup_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "exam"
-
 app = FastAPI(lifespan=lifespan)
-app.state.AGENT_NAME = AGENT_NAME
 
 app.add_middleware(
     CORSMiddleware,
@@ -104,6 +100,12 @@ async def get_index() -> JSONResponse:
             "status": "ok",
             "websocket_path": "/ws",
             "voice_reference_path": "/voice-reference",
+            "voice_profile": app.state.VOICE_PROFILE,
+            "runtime": {
+                "total": app.state.RUNTIME_MANAGER.total_count,
+                "busy": app.state.RUNTIME_MANAGER.busy_count,
+                "max_concurrent": app.state.RUNTIME_MANAGER.max_concurrent,
+            },
         }
     )
 
@@ -116,15 +118,17 @@ async def ws_endpoint(
     attempt_id: str = None,
 ):
     if user_id or exam_id or attempt_id:
+        if app.state.VOICE_PROFILE == "darija":
+            await websocket.close(code=1008, reason="Darija supports general chat only.")
+            return
         context = await database.load_session_context(user_id, exam_id, attempt_id)
         brain, _initial_state = build_exam_agent(context)
-        config = getattr(app.state, "AGENT_CONFIG", None) or load_agent_config(AGENT_NAME)
-        config = {**config, "agent_name": AGENT_NAME}
+        config = {**app.state.AGENT_CONFIG, "agent_name": "exam"}
         await run_session(websocket, brain, config, app.state, user_id, context.get("exam_id"), attempt_id)
         return
 
-    brain, _initial_state = build_chat_agent({})
-    config = {**load_agent_config("chat"), "agent_name": "chat"}
+    brain, _initial_state = build_chat_agent({"profile": app.state.VOICE_PROFILE})
+    config = {**app.state.AGENT_CONFIG, "agent_name": "chat"}
     await run_session(websocket, brain, config, app.state)
 
 

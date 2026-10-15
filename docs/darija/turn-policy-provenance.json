@@ -1,0 +1,11 @@
+{
+  "model_id": "afyfbadreddine77/darija-turn-detection",
+  "revision": "a6b5bc2249d83bd0d05c5c4c3d8f5e1eafe204e4",
+  "source": "Inspected hf_turn_export from the silma-tts workspace",
+  "files": {
+    "text.py": "4c2e0b28995f1894eae13ef272da37dfdb71538ac9ce6b26c6fc7d89cbb0dd95",
+    "turn_policy.py": "b936edc1cdbfdf0fd01a098528b8096cd2f05a8fa6aaf07d319f5af0cc94d6f4",
+    "inference.py": "2976d813c8ee28f0ff04ea4a54107b694d8f3a2f354a49779ad8199f40c9ee25"
+  },
+  "adaptation": "Vendor normalization and syntax overrides; retain existing dynamic backend pause formula. Do not copy the source inference script fixed silence schedule."
+}

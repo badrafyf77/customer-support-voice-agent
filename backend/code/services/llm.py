@@ -6,6 +6,8 @@ import uuid
 from threading import Lock
 from typing import Any, Dict, Generator, List, Optional
 
+from services import atlas
+
 try:
     from openai import OpenAI, APIError, APITimeoutError, RateLimitError, APIConnectionError
     OPENAI_AVAILABLE = True
@@ -54,14 +56,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8000/v1")
 
 
-def _create_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
+def _create_openai_client(api_key: str, base_url: Optional[str] = None, max_retries: int = 2) -> OpenAI:
     if not OPENAI_AVAILABLE:
         raise ImportError("openai library is required for LLM backends.")
 
     client_args = {
         "api_key": api_key,
         "timeout": 30.0,
-        "max_retries": 2,
+        "max_retries": max_retries,
     }
     if base_url:
         client_args["base_url"] = base_url
@@ -86,6 +88,9 @@ class LLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         no_think: bool = False,
+        chat_format: str = "auto",
+        max_tokens: Optional[int] = None,
+        context_limit: Optional[int] = None,
     ):
         self.backend = (backend or "").strip().lower()
         if self.backend not in self.SUPPORTED_BACKENDS:
@@ -97,6 +102,18 @@ class LLM:
             raise ImportError("openai library is required for openai/vllm backends.")
 
         self.model = model
+        self.chat_format = ("atlas" if model == atlas.MODEL_ID else "standard") if chat_format == "auto" else chat_format
+        if self.chat_format not in {"standard", "atlas"}:
+            raise ValueError("Unsupported LLM chat format")
+        self.max_tokens = max_tokens
+        self.context_limit = context_limit
+        if self.chat_format == "atlas":
+            if self.backend != "vllm" or model != atlas.MODEL_ID or no_think:
+                raise ValueError("Atlas requires its pinned vLLM served model without /nothink")
+            atlas.generation_options({}, max_tokens if max_tokens is not None else atlas.RESPONSE_LIMIT)
+            if context_limit not in (None, atlas.CONTEXT_LIMIT):
+                raise ValueError("Atlas Studio context limit must be 4096")
+            self.context_limit = atlas.CONTEXT_LIMIT
         self.no_think = no_think
         self._provided_api_key = api_key
         self._provided_base_url = base_url
@@ -121,6 +138,7 @@ class LLM:
 
         self._active_requests: Dict[str, Dict[str, Any]] = {}
         self._requests_lock = Lock()
+        self._cancel_epoch = 0
 
         logger.info(
             "🤖⚙️ LLM initialized (backend=%s, model=%s, base_url=%s)",
@@ -149,6 +167,7 @@ class LLM:
                 self.client = _create_openai_client(
                     api_key=self.effective_api_key,
                     base_url=self.effective_base_url,
+                    max_retries=0 if self.chat_format == "atlas" else 2,
                 )
                 init_ok = self.client is not None
             except Exception as exc:
@@ -161,41 +180,28 @@ class LLM:
                 logger.info("🤖✅ %s client initialized.", self.backend)
             return init_ok
 
-    def _register_request(self, request_id: str, request_type: str, stream_obj: Optional[Any]) -> None:
-        with self._requests_lock:
-            self._active_requests[request_id] = {
-                "type": request_type,
-                "stream": stream_obj,
-                "start_time": time.time(),
-            }
-
-    def _cancel_single_request_unsafe(self, request_id: str) -> bool:
-        req_data = self._active_requests.pop(request_id, None)
-        if not req_data:
-            return False
-
-        stream_obj = req_data.get("stream")
-        if stream_obj and hasattr(stream_obj, "close") and callable(stream_obj.close):
+    @staticmethod
+    def _close_stream(stream) -> None:
+        if stream is not None and callable(getattr(stream, "close", None)):
             try:
-                stream_obj.close()
-            except Exception as exc:
-                logger.warning("🤖⚠️ Error closing stream for %s: %s", request_id, exc, exc_info=False)
-
-        return True
+                stream.close()
+            except Exception:
+                logger.debug("Error closing LLM stream", exc_info=True)
 
     def cancel_generation(self, request_id: Optional[str] = None) -> bool:
-        cancelled_any = False
         with self._requests_lock:
             if request_id is None:
-                request_ids = list(self._active_requests.keys())
+                # Includes generators created but not yet advanced by a worker.
+                self._cancel_epoch += 1
+                requests = list(self._active_requests.values())
+                self._active_requests.clear()
             else:
-                request_ids = [request_id] if request_id in self._active_requests else []
-
-            for req_id in request_ids:
-                if self._cancel_single_request_unsafe(req_id):
-                    cancelled_any = True
-
-        return cancelled_any
+                request = self._active_requests.pop(request_id, None)
+                requests = [request] if request is not None else []
+        # Closing a transport can block; never hold the request registry lock.
+        for request in requests:
+            self._close_stream(request.get("stream"))
+        return bool(requests)
 
     def cleanup_stale_requests(self, timeout_seconds: int = 300) -> int:
         now = time.time()
@@ -212,11 +218,11 @@ class LLM:
                 cleaned += 1
         return cleaned
 
-    def _yield_openai_chunks(self, stream: Any, request_id: str) -> Generator[str, None, None]:
+    def _yield_openai_chunks(self, stream: Any, request_id: str, ticket: dict) -> Generator[str, None, None]:
         try:
             for chunk in stream:
                 with self._requests_lock:
-                    if request_id not in self._active_requests:
+                    if self._active_requests.get(request_id) is not ticket:
                         break
 
                 if not getattr(chunk, "choices", None):
@@ -228,7 +234,7 @@ class LLM:
                     yield content
         except APIConnectionError as exc:
             with self._requests_lock:
-                was_cancelled = request_id not in self._active_requests
+                was_cancelled = self._active_requests.get(request_id) is not ticket
             if not was_cancelled:
                 raise ConnectionError(f"Streaming connection error: {exc}") from exc
         finally:
@@ -246,54 +252,80 @@ class LLM:
         request_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Generator[str, None, None]:
+        # Capture the cancellation epoch when the worker is given a generator,
+        # before the first next() triggers network work.
+        with self._requests_lock:
+            epoch = self._cancel_epoch
+        req_id = request_id or f"{self.backend}-{uuid.uuid4()}"
+        return self._generate(text, history, use_system_prompt, req_id, epoch, kwargs)
+
+    def _generate(self, text, history, use_system_prompt, req_id, epoch, kwargs):
         if not self._lazy_initialize_clients():
             raise RuntimeError(f"LLM backend '{self.backend}' client failed to initialize.")
+        if self.chat_format == "atlas":
+            messages = atlas.format_messages(
+                text, history, self.system_prompt if use_system_prompt else None,
+            )
+            kwargs = atlas.generation_options(
+                kwargs, self.max_tokens if self.max_tokens is not None else atlas.RESPONSE_LIMIT,
+            )
+        else:
+            messages = []
+            if use_system_prompt and self.system_prompt_message:
+                messages.append(dict(self.system_prompt_message))
+            if history:
+                messages.extend(dict(message) for message in history)
+            if not messages or messages[-1].get("role") != "user":
+                user_text = f"{text}/nothink" if self.no_think else text
+                messages.append({"role": "user", "content": user_text})
+            if self.max_tokens is not None:
+                kwargs.setdefault("max_tokens", self.max_tokens)
+        kwargs.setdefault("temperature", 0.8 if self.backend == "vllm" else 0.7)
+        kwargs.setdefault("frequency_penalty", 0.25)
+        kwargs.setdefault("presence_penalty", 0.1)
 
-        req_id = request_id if request_id else f"{self.backend}-{uuid.uuid4()}"
-
-        messages: List[Dict[str, str]] = []
-        if use_system_prompt and self.system_prompt_message:
-            messages.append(self.system_prompt_message)
-        if history:
-            messages.extend(history)
-
-        if not messages or messages[-1].get("role") != "user":
-            user_text = f"{text}/nothink" if self.no_think else text
-            messages.append({"role": "user", "content": user_text})
-
-        if "temperature" not in kwargs:
-            kwargs["temperature"] = 0.8 if self.backend == "vllm" else 0.7
-        if "frequency_penalty" not in kwargs:
-            kwargs["frequency_penalty"] = 0.25
-        if "presence_penalty" not in kwargs:
-            kwargs["presence_penalty"] = 0.1
-
+        ticket = {"type": self.backend, "stream": None, "start_time": time.time()}
+        with self._requests_lock:
+            if epoch != self._cancel_epoch:
+                return
+            if req_id in self._active_requests:
+                raise ValueError(f"Duplicate active LLM request ID: {req_id}")
+            # Cancellation must see requests waiting for HTTP response headers.
+            self._active_requests[req_id] = ticket
         stream = None
         try:
             assert self.client is not None
             stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                stream=True,
-                **kwargs,
+                model=self.model, messages=messages, stream=True, **kwargs,
             )
-            self._register_request(req_id, self.backend, stream)
-            yield from self._yield_openai_chunks(stream, req_id)
-        except (APIConnectionError, APITimeoutError, TimeoutError) as exc:
-            raise ConnectionError(f"Communication error during generation: {exc}") from exc
-        except (APIError, RateLimitError):
+            with self._requests_lock:
+                active = self._active_requests.get(req_id) is ticket
+                if active:
+                    ticket["stream"] = stream
+            if not active:
+                return
+            chunks = self._yield_openai_chunks(stream, req_id, ticket)
+            yield from atlas.spoken_chunks(chunks) if self.chat_format == "atlas" else chunks
+        except Exception as exc:
+            with self._requests_lock:
+                cancelled = self._active_requests.get(req_id) is not ticket
+            if cancelled:
+                return
+            if isinstance(exc, (APIConnectionError, APITimeoutError, TimeoutError)):
+                raise ConnectionError(f"Communication error during generation: {exc}") from exc
             raise
         finally:
             with self._requests_lock:
-                if req_id in self._active_requests:
-                    self._cancel_single_request_unsafe(req_id)
+                if self._active_requests.get(req_id) is ticket:
+                    self._active_requests.pop(req_id)
+            self._close_stream(stream)
 
     def prewarm(self, max_retries: int = 1) -> bool:
         if not self._lazy_initialize_clients():
             return False
 
         attempts = 0
-        prompt = "Respond with only the word 'OK'."
+        prompt = "جاوب غير بكلمة واخا." if self.chat_format == "atlas" else "Respond with only the word 'OK'."
         while attempts <= max_retries:
             generator = None
             try:
@@ -343,6 +375,8 @@ class LLM:
             },
         ]
 
+        if self.chat_format == "atlas":
+            history = [{"role": "user", "content": "عاود هاد الكلمات: واحد جوج ثلاثة ربعة خمسة ستة سبعة تمانية تسعود عشرة."}]
         generator = None
         token_count = 0
         start_time = None

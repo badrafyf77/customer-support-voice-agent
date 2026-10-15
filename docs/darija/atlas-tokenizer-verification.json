@@ -1,0 +1,19 @@
+{
+  "model_id": "MBZUAI-Paris/Atlas-Chat-2B",
+  "revision": "a6244a4c50bc32b65c6c8dc4dc1dab218b580088",
+  "eos_token_ids": [
+    1,
+    107
+  ],
+  "special_token_ids": {
+    "<bos>": 2,
+    "<eos>": 1,
+    "<start_of_turn>": 106,
+    "<end_of_turn>": 107
+  },
+  "native_template_verified": true,
+  "multi_turn_generation_prompt_verified": true,
+  "identifiers_preserved": true,
+  "sample_prompt_tokens": 74,
+  "weights_loaded": false
+}

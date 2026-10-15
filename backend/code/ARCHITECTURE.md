@@ -44,8 +44,11 @@ Type key:
 | `core/logsetup.py` | Configures timestamped colored logging. | `server.py`, `core/session.py`. | `core.colors`, stdlib logging/time. | Support | Overlaps cosmetically with `core/colors.py`; both are logging concerns. |
 | `core/models.py` | Shared data models and conversation-history normalization. | `agents/base.py`, agents, `core/brain.py`, `core/session.py`. | stdlib dataclasses/datetime/regex. | Core | Replaces the previous split session models/memory files. |
 | `core/nodes/stt/faster_whisper.py` | STT node using RealtimeSTT/faster-whisper plus VAD and turn callbacks. | `core/transport/websocket.py`, `core/session.py` for config mutation. | `core.config`, `core.turndetect`, `core.text_similarity`, `core.colors`, RealtimeSTT, numpy. | Core | Single source of truth for STT/VAD behavior; should not be duplicated in `services/`. |
-| `core/nodes/tts/realtime.py` | TTS node using RealtimeTTS with Kokoro/Coqui/Orpheus engines. | `core/pipeline.py`. | RealtimeTTS, Hugging Face Hub, numpy, stdlib threading/queues. | Core | Single source of truth for TTS behavior; should not be duplicated in `services/`. |
-| `core/pipeline.py` | Orchestrates LLM text generation, control-block stripping, and TTS worker threads. | `core/voice_runtime_pool.py`, `core/session.py`. | `core.nodes.tts.realtime`, `services.llm`, `core.text_context`, `core.text_similarity`, `core.brain`. | Core | Still contains a lot of worker detail; provider-specific TTS logic is delegated to the TTS node. |
+| `core/nodes/tts/factory.py` | Selects the legacy or SILMA TTS provider through lazy imports. | `core/pipeline.py`, typed preview. | Provider modules and shared config. | Core | Keeps provider choice out of worker orchestration. |
+| `core/nodes/tts/realtime.py` | TTS node using RealtimeTTS with Kokoro/Coqui/Orpheus engines. | Provider factory. | RealtimeTTS, Hugging Face Hub, numpy, stdlib threading/queues. | Core | Existing English engine implementation. |
+| `core/nodes/tts/silma.py` | HTTP synthesis, phrase streaming, bounded audio buffering, and cancellation. | Provider factory. | Internal SILMA service, `silma_text`, shared artifact pins. | Optional | Implements the same pipeline contract as legacy providers. |
+| `core/nodes/tts/silma_runtime.py` | Cached custom model, Vocos, and selected reference inference. | `studio/silma_service.py`. | `silma_model`, torch/F5/Vocos in the isolated service environment. | Optional | GPU inference stays outside the voice backend process. |
+| `core/pipeline.py` | Orchestrates LLM text generation, control-block stripping, and TTS worker threads. | `core/voice_runtime_pool.py`, `core/session.py`. | `core.nodes.tts.factory`, `services.llm`, `core.text_context`, `core.text_similarity`, `core.brain`. | Core | Provider-specific TTS logic remains delegated to the TTS node. |
 | `core/session.py` | Owns app lifespan, WebSocket session tasks, transcript history, interrupts, and finish flow. | `server.py`. | FastAPI WebSocket, `core.config`, `core.models`, `core.pipeline`, `core.upsample_overlap`, `core.voice_runtime_pool`, `services.voice_verification`, `services.database`. | Core | Large file; overlaps a little with agent finish/save responsibilities. |
 | `core/text_context.py` | Finds safe text chunks for quick TTS handoff. | `core/pipeline.py`. | `core.colors`, stdlib logging/typing. | Support | Related to `core/text_similarity.py`, but handles chunk boundaries rather than similarity. |
 | `core/text_similarity.py` | Normalizes text and computes similarity for abort/de-dupe logic. | `core/pipeline.py`, `core/nodes/stt/faster_whisper.py`. | stdlib regex/difflib/logging. | Support | Related to STT normalization, but reusable enough to stay separate. |
@@ -59,6 +62,7 @@ Type key:
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
 | `services/database.py` | Supabase access for profiles, exams, attempts, transcripts, and voice references. | `server.py`, `agents/exam/agent.py`, `core/session.py`. | `core.config`, Supabase client. | Core | Persistence details overlap slightly with exam finish logic in `agents/exam/agent.py`. |
+| `services/atlas.py` | Atlas native message adaptation, bounded generation options, and streaming role-token suppression. | `services/llm.py`, Studio verification scripts. | stdlib only; pinned Atlas contract. | Support | Does not own session history or TTS scheduling. |
 | `services/llm.py` | Provider wrapper for vLLM/OpenAI-compatible streaming generation. | `core/pipeline.py`. | OpenAI client, env vars, stdlib threading/time/uuid. | Core | No overlap; LLM API access stays here while orchestration stays in `core/pipeline.py`. |
 | `services/speaker_verification.py` | Extracts and compares speaker embeddings. | `server.py`, `services/voice_verification.py`. | SpeechBrain/torch stack, numpy, `core.config`. | Optional | Supports voice verification only; separate from STT. |
 | `services/voice_verification.py` | Samples student answer audio and records speaker-verification checks. | `core/session.py`. | `services.speaker_verification`, `core.config`, numpy/threading. | Optional | Works with `services/database.py` for persistence, but owns verification decisions. |
@@ -75,6 +79,24 @@ Type key:
 6. Incoming audio bytes go to `AudioInputProcessor`, which resamples them and feeds `core/nodes/stt/faster_whisper.py`.
 7. The STT node emits partial, potential-final, and final transcript callbacks into `core/session.py`.
 8. On a final user turn, `core/session.py` appends the user message, asks the active agent via `BaseAgent.run_turn(...)`, and receives an `AgentResult`.
-9. `core/pipeline.py` sends the agent prompt/history to `services/llm.py`, strips any exam control block, and streams spoken text to `core/nodes/tts/realtime.py`.
+9. `core/pipeline.py` sends the agent prompt/history to `services/llm.py`, strips any exam control block, and streams spoken text to the TTS provider selected by `core/nodes/tts/factory.py`.
 10. The TTS node produces audio chunks; `core/session.py` base64-encodes them with `core/upsample_overlap.py` and sends `tts_chunk` messages back over the WebSocket.
 11. When the assistant turn finishes, `core/session.py` sends final text events, updates conversation history, and lets the agent apply any control transition.
+
+## Darija typed chat (phase 3)
+
+`studio/chat_preview.py` adapts typed input to the same `SpeechPipelineManager`.
+The Darija chat agent owns the spoken prompt; `services/atlas.py` folds it into
+native user/assistant messages only at the LLM request boundary. vLLM and SILMA
+remain independent loopback services. The existing quick/final workers stream
+SILMA PCM through the shared preview and unchanged frontend playback worklet.
+Phase 4 passes per-instance ASR/turn configuration through the runtime manager
+and audio transport. Darija recognition shares the verified main model for
+partial/final text. `core/darija_turn.py` applies the saved calibration and syntax
+contract; `core/turndetect.py` feeds its score into the existing dynamic timing
+formula. Reset epochs invalidate pending old turn decisions. The microphone path
+is enabled. Phase 5 adds scoped delivery of generated text/PCM, final-STT turn
+commitment, VAD barge-in during synthesis, explicit model failure handling and
+shielded session cleanup. Stopped/unsafe runtimes retire instead of being reused.
+The frontend keeps the existing wire/worklet formats and adds automatic text
+direction plus stale-socket/generation guards. Live Studio acceptance is pending.

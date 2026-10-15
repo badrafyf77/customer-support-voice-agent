@@ -308,6 +308,8 @@ button:disabled {
 .message-content {
   margin: 0;
   white-space: pre-wrap;
+  text-align: start;
+  unicode-bidi: plaintext;
   line-height: 1.55;
 }
 

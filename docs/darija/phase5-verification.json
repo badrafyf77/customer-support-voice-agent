@@ -1,0 +1,57 @@
+{
+  "phase": 5,
+  "date": "2026-10-15",
+  "branch": "codex/darija-voice-model-review",
+  "local_platform": "macOS arm64; Python 3.12 (Python 3.10 syntax checked); Node 26.5",
+  "backend_tests": {
+    "count": 83,
+    "passed": true,
+    "web_dependencies": {
+      "fastapi": "0.143.0",
+      "starlette": "1.7.0",
+      "pydantic": "2.14.1",
+      "anyio": "4.15.1",
+      "openai": "3.29.0"
+    }
+  },
+  "frontend": {
+    "production_build_passed": true,
+    "typescript_passed": true,
+    "generation_worklet_tests_passed": true,
+    "playwright": "1.62.1",
+    "browser": "Chromium headless shell 151.0.7922.34",
+    "production_browser_suite": {
+      "passed": true,
+      "checks": [
+        "Production /ws, microphone worklet/framing, final STT, ordered PCM, one final bubble, Arabic direction and identifiers",
+        "Interruption between quick/final phrases, immediate next turn, foreign input terms retained",
+        "Reset clears browser transcript, playback and server conversation history",
+        "Model service failure is visible, playback/capture stop, runtime returns for a clean reconnect",
+        "Old socket callbacks ignored; reused runtime and browser both start with empty history",
+        "Scoped old PCM and Stop rejected; actual production playback worklet is used",
+        "Stopping during microphone setup closes a stream granted after cancellation"
+      ],
+      "live_models": false,
+      "audible_quality_review": false
+    },
+    "screenshot_visually_inspected": true
+  },
+  "production_paths_exercised": [
+    "Next.js production UI",
+    "microphone worklet and binary framing",
+    "/ws session bodies",
+    "runtime leasing and reset",
+    "SpeechPipelineManager quick/final workers",
+    "PCM playback worklet"
+  ],
+  "deterministic_test_boundaries": [
+    "STT transcripts",
+    "LLM streamed content/network",
+    "TTS synthesis PCM"
+  ],
+  "studio_contacted": false,
+  "live_models_loaded": false,
+  "selected_voice": "voice1",
+  "checkpoint_variant": "main",
+  "live_exit_check": "Deferred by user; sustained Darija conversation, recognition/voice quality, audible interruption and L4 memory/latency remain unverified."
+}

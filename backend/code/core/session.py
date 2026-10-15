@@ -19,6 +19,7 @@ from core.upsample_overlap import UpsampleOverlap
 from datetime import datetime
 from core.colors import Colors
 import asyncio
+import anyio
 import struct
 import json
 import time
@@ -36,7 +37,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from core.config import (
     get_env,
-    load_agent_config,
+    load_runtime_config,
     load_env_file_if_available,
     read_float_env,
     read_int_env,
@@ -220,9 +221,21 @@ async def lifespan(app):
     """
     logger.info("🖥️▶️ Server starting up")
     
-    agent_name = getattr(app.state, "AGENT_NAME", get_env("VOICE_AGENT", "exam") or "exam")
-    agent_config = load_agent_config(agent_name)
+    agent_name, profile, agent_config = load_runtime_config()
+    app.state.AGENT_NAME = agent_name
+    app.state.VOICE_PROFILE = profile
     app.state.AGENT_CONFIG = agent_config
+    logger.info("Runtime selected: agent=%s profile=%s language=%s",
+                agent_name, profile, agent_config.get("language"))
+    if profile == "darija":
+        from core.model_artifacts import validate_prepared_models
+        model_root = get_env("DARIJA_MODEL_ROOT")
+        if not model_root:
+            raise RuntimeError("DARIJA_MODEL_ROOT is required. See backend/studio/README.md.")
+        models = validate_prepared_models(model_root)
+        for role, model in models.items():
+            logger.info("Darija artifact: role=%s id=%s revision=%s path=%s",
+                        role, model["repo_id"], model["revision"], model["path"])
 
     configured_llm_provider = (agent_config.get("llm_provider") or LLM_START_PROVIDER or "vllm").strip().lower()
     if configured_llm_provider not in {"vllm", "openai"}:
@@ -239,6 +252,7 @@ async def lifespan(app):
     configured_orpheus_model = agent_config.get("orpheus_model") or TTS_ORPHEUS_MODEL
     configured_no_think = bool(agent_config.get("no_think", NO_THINK))
 
+    stt_config = {}
     # Apply STT model config before warmed runtimes create their transcribers.
     try:
         from core.nodes.stt import faster_whisper as stt
@@ -247,7 +261,27 @@ async def lifespan(app):
         stt_realtime_model = agent_config.get("stt_realtime_model") or stt_model
         stt.DEFAULT_RECORDER_CONFIG["model"] = stt_model
         stt.DEFAULT_RECORDER_CONFIG["realtime_model_type"] = stt_realtime_model
+        if profile == "darija":
+            from pathlib import Path
+            from core.nodes.stt.configuration import darija_recorder_config
+            from agents.chat.agent import DARIJA_SYSTEM_PROMPT
+            expected_asr = models["stt"]["path"]
+            for configured in (agent_config.get("stt_model"), agent_config.get("stt_realtime_model")):
+                if configured and Path(configured).expanduser().resolve() != Path(expected_asr).resolve():
+                    raise ValueError("Darija STT must use the verified prepared ASR export for partial and final transcription")
+            if configured_language != "ar" or configured_tts_engine != "silma" or configured_llm_provider != "vllm":
+                raise ValueError("Darija requires Arabic STT, SILMA TTS and vLLM Atlas")
+            from services.atlas import MODEL_ID
+            if configured_llm_model != MODEL_ID or configured_no_think:
+                raise ValueError("Darija requires the pinned Atlas served model without /nothink")
+            stt_config = {
+                "profile": "darija", "turn_model_path": models["turn"]["path"],
+                "recorder_config": darija_recorder_config(stt.DEFAULT_RECORDER_CONFIG, expected_asr),
+            }
+            logger.info("Darija STT: partial=final=%s language=ar main_model_realtime=true turn_device=cpu", expected_asr)
     except Exception:
+        if profile == "darija":
+            raise
         logger.warning("🖥️⚠️ Could not apply STT config from agent YAML.", exc_info=True)
 
     logger.info(
@@ -261,10 +295,20 @@ async def lifespan(app):
         "tts_engine": configured_tts_engine,
         "llm_provider": configured_llm_provider,
         "llm_model": configured_llm_model,
+        "llm_chat_format": agent_config.get("llm_chat_format", "auto"),
+        "llm_max_tokens": agent_config.get("llm_max_tokens"),
+        "llm_context_limit": agent_config.get("llm_context_limit"),
         "no_think": configured_no_think,
         "orpheus_model": configured_orpheus_model,
     }
     
+    if profile == "darija":
+        # Warmup must use the Darija prompt even before the first browser lease.
+        PIPELINE_CONFIG["system_prompt"] = DARIJA_SYSTEM_PROMPT
+        PIPELINE_CONFIG["llm_chat_format"] = "atlas"
+        PIPELINE_CONFIG["llm_max_tokens"] = 256
+        PIPELINE_CONFIG["llm_context_limit"] = 4096
+
     # Store configuration and shared components
     app.state.PIPELINE_CONFIG = PIPELINE_CONFIG
     app.state.RUNTIME_ACQUIRE_TIMEOUT_SECONDS = VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS
@@ -275,18 +319,19 @@ async def lifespan(app):
 
     app.state.RUNTIME_MANAGER = VoiceRuntimeManager(
         min_warm=VOICE_RUNTIME_MIN_WARM,
-        max_concurrent=VOICE_RUNTIME_MAX_CONCURRENT,
+        max_concurrent=1 if profile == "darija" else VOICE_RUNTIME_MAX_CONCURRENT,
         idle_ttl_seconds=VOICE_RUNTIME_IDLE_TTL_SECONDS,
         pipeline_config=PIPELINE_CONFIG,
         language=configured_language,
         tts_engine=configured_tts_engine,
+        stt_config=stt_config,
     )
     await app.state.RUNTIME_MANAGER.startup()
 
     logger.info(
         "🖥️⚙️ Voice runtime manager ready (min_warm=%s, max_concurrent=%s, idle_ttl=%ss, acquire_timeout=%ss)",
         VOICE_RUNTIME_MIN_WARM,
-        VOICE_RUNTIME_MAX_CONCURRENT,
+        1 if profile == "darija" else VOICE_RUNTIME_MAX_CONCURRENT,
         VOICE_RUNTIME_IDLE_TTL_SECONDS,
         VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS,
     )
@@ -508,6 +553,8 @@ async def process_incoming_data(
     try:
         while True:
             msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
             if "bytes" in msg and msg["bytes"]:
                 if getattr(conn_state, "finish_in_progress", False):
                     continue
@@ -568,7 +615,15 @@ async def process_incoming_data(
                 # Add to the handleJSONMessage function in server.py
                 elif msg_type == "clear_history":
                     logger.info("🖥️ℹ️ Received clear_history from client.")
-                    conn_state.pipeline_manager.reset()
+                    callbacks.invalidate_output()
+                    message_queue.put_nowait({"type": "stop_tts", "content": ""})
+                    await asyncio.to_thread(conn_state.pipeline_manager.reset)
+                    conn_state.conversation_history.clear()
+                    if hasattr(conn_state.brain, "reset_session_state"):
+                        conn_state.brain.reset_session_state()
+                    conn_state.pipeline_manager.history = conn_state.conversation_history
+                    conn_state.audio_processor.transcriber.reset_session_state()
+                    callbacks.reset_state()
                 elif msg_type == "set_speed":
                     speed_value = data.get("speed", 0)
                     speed_factor = speed_value / 100.0  # Convert 0-100 to 0.0-1.0
@@ -627,7 +682,7 @@ async def process_incoming_data(
     except Exception as e:
         logger.exception(f"🖥️💥 {Colors.apply('EXCEPTION').red} in process_incoming_data: {repr(e)}")
 
-async def send_text_messages(ws: WebSocket, message_queue: asyncio.Queue) -> None:
+async def send_text_messages(ws: WebSocket, message_queue: asyncio.Queue, callbacks=None) -> None:
     """
     Continuously sends text messages from a queue to the client via WebSocket.
 
@@ -642,12 +697,19 @@ async def send_text_messages(ws: WebSocket, message_queue: asyncio.Queue) -> Non
         while True:
             await asyncio.sleep(0.001) # Yield control
             data = await message_queue.get()
+            delivered = data.pop("_delivered", None)
+            if callbacks is not None and not callbacks.accepts(data):
+                if delivered and not delivered.done():
+                    delivered.set_result(False)
+                continue
             msg_type = data.get("type")
             if msg_type != "tts_chunk":
                 logger.info(Colors.apply(f"🖥️📤 →→Client: {data}").orange)
             else:
                 logger.debug("🖥️📤 sent tts_chunk")
             await ws.send_json(data)
+            if delivered and not delivered.done():
+                delivered.set_result(True)
     except asyncio.CancelledError:
         pass # Task cancellation is expected on disconnect
     except WebSocketDisconnect as e:
@@ -670,6 +732,8 @@ async def _reset_interrupt_flag_async(audio_processor, callbacks: 'Transcription
         callbacks: The TranscriptionCallbacks instance for the connection.
     """
     await asyncio.sleep(1)
+    if callbacks.closed:
+        return
     if getattr(callbacks.conn_state, "lock_microphone_until_finish", False):
         return
     # Check the AudioInputProcessor's own interrupted state
@@ -712,7 +776,27 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
                 callbacks.interruption_time = 0 # Reset via callbacks
                 logger.info(Colors.apply("🖥️🎙️ interruption flag reset after 2 seconds").cyan)
 
-            is_tts_finished = conn_state.pipeline_manager.is_valid_gen() and conn_state.pipeline_manager.running_generation.audio_quick_finished
+            generation = conn_state.pipeline_manager.running_generation
+            if callbacks.darija and generation and not generation.abortion_started and (
+                generation.llm_aborted or generation.audio_quick_aborted or generation.audio_final_aborted
+                or (generation.llm_finished and not generation.quick_answer and not generation.expects_control_block)
+            ):
+                callbacks.invalidate_output()
+                callbacks.user_interrupted = True
+                callbacks.tts_to_client = False
+                message_queue.put_nowait({"type": "stop_tts", "content": "", "generation_id": generation.id})
+                delivered = asyncio.get_running_loop().create_future()
+                message_queue.put_nowait({"type": "status", "status": "error",
+                    "message": "Speech generation failed. Stop and reconnect to try again.",
+                    "_delivered": delivered})
+                await asyncio.to_thread(conn_state.pipeline_manager.abort_generation, reason="model service failure")
+                try:
+                    await asyncio.wait_for(delivered, timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+                return
+
+            is_tts_finished = bool(generation and not generation.abortion_started and generation.audio_quick_finished)
 
             def log_status():
                 nonlocal prev_status
@@ -754,10 +838,10 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
             if callbacks.user_interrupted:
                 log_status()
                 # Clear the audio queue
-                if conn_state.pipeline_manager.running_generation:
+                if generation:
                     try:
-                        while not conn_state.pipeline_manager.running_generation.audio_chunks.empty():
-                            conn_state.pipeline_manager.running_generation.audio_chunks.get_nowait()
+                        while not generation.audio_chunks.empty():
+                            generation.audio_chunks.get_nowait()
                     except:
                         pass
                 await asyncio.sleep(0.001)
@@ -769,52 +853,57 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
                 await asyncio.sleep(0.001)  # Only sleep when waiting
                 continue
 
-            if not conn_state.pipeline_manager.running_generation:
+            if not generation:
                 log_status()
                 await asyncio.sleep(0.001)  # Only sleep when waiting
                 continue
 
-            if conn_state.pipeline_manager.running_generation.abortion_started:
+            if generation.abortion_started:
                 log_status()
                 await asyncio.sleep(0.001)  # Only sleep when waiting
                 continue
 
-            if not conn_state.pipeline_manager.running_generation.audio_quick_finished:
-                conn_state.pipeline_manager.running_generation.tts_quick_allowed_event.set()
+            if not generation.audio_quick_finished:
+                generation.tts_quick_allowed_event.set()
 
-            if not conn_state.pipeline_manager.running_generation.quick_answer_first_chunk_ready:
+            if not generation.quick_answer_first_chunk_ready:
                 log_status()
                 await asyncio.sleep(0.001)  # Only sleep when waiting
                 continue
 
             chunk = None
             try:
-                chunk = conn_state.pipeline_manager.running_generation.audio_chunks.get_nowait()
+                chunk = generation.audio_chunks.get_nowait()
                 if chunk:
                     last_quick_answer_chunk = time.time()
                     # TTS chunk received - no need to log every chunk
             except Empty:
-                final_expected = conn_state.pipeline_manager.running_generation.quick_answer_provided
-                audio_final_finished = conn_state.pipeline_manager.running_generation.audio_final_finished
-                llm_finished = conn_state.pipeline_manager.running_generation.llm_finished
+                final_expected = generation.quick_answer_provided
+                audio_final_finished = generation.audio_final_finished
+                llm_finished = generation.llm_finished
 
                 # Only send final answer when BOTH audio AND LLM are finished
                 if (not final_expected or audio_final_finished) and llm_finished:
                     # Wait for LLM to be completely done (not just finished flag, but actually stopped)
-                    if conn_state.pipeline_manager.running_generation:
+                    if generation:
                         # Wait for the LLM finished event to ensure all processing is complete
-                        llm_finished_event = conn_state.pipeline_manager.running_generation.llm_finished_event
+                        llm_finished_event = generation.llm_finished_event
                         if llm_finished_event:
                             # Wait up to 1 second for the event (should already be set if llm_finished is True)
                             await asyncio.to_thread(llm_finished_event.wait, 1.0)
                     
+                    if conn_state.pipeline_manager.running_generation is not generation or generation.abortion_started:
+                        continue
                     # Additional wait to ensure ALL on_partial_assistant_text callbacks have been processed
                     # The callbacks might be queued in the event loop
                     await asyncio.sleep(0.5)
+                    if (conn_state.pipeline_manager.running_generation is not generation
+                            or generation.abortion_started or callbacks.user_interrupted):
+                        continue
                     
                     # Force update assistant_answer from pipeline manager to ensure we have the complete text
-                    if conn_state.pipeline_manager.running_generation:
-                        complete_answer = conn_state.pipeline_manager.running_generation.quick_answer + conn_state.pipeline_manager.running_generation.final_answer
+                    if generation:
+                        complete_answer = generation.quick_answer + generation.final_answer
                         # Update the callback's assistant_answer with the complete text
                         if len(complete_answer) > len(callbacks.assistant_answer):
                             callbacks.assistant_answer = complete_answer
@@ -823,7 +912,8 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
                             logger.info(f"🖥️✅ Callback assistant_answer already has complete text: '{callbacks.assistant_answer[:100]}...'")
                     
                     delivered_turn = callbacks.send_final_assistant_answer() # Callbacks method
-                    conn_state.pipeline_manager.running_generation = None
+                    if conn_state.pipeline_manager.running_generation is generation:
+                        conn_state.pipeline_manager.running_generation = None
 
                     callbacks.tts_chunk_sent = False # Reset via callbacks
                     callbacks.reset_state() # Reset connection state via callbacks
@@ -859,12 +949,13 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
                 continue
 
             # Check if user interrupted before sending this chunk
-            if callbacks.user_interrupted:
+            if (callbacks.user_interrupted or generation.abortion_started
+                    or conn_state.pipeline_manager.running_generation is not generation):
                 logger.info(f"🖥️� User itnterrupted - stopping TTS chunk sending")
                 # Clear any remaining chunks in the queue
                 try:
-                    while not conn_state.pipeline_manager.running_generation.audio_chunks.empty():
-                        conn_state.pipeline_manager.running_generation.audio_chunks.get_nowait()
+                    while not generation.audio_chunks.empty():
+                        generation.audio_chunks.get_nowait()
                 except:
                     pass
                 continue  # Skip sending this chunk
@@ -874,7 +965,8 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
             logger.debug(f"🖥️🔊 sending tts_chunk b64_len={len(base64_chunk)}")
             message_queue.put_nowait({
                 "type": "tts_chunk",
-                "content": base64_chunk
+                "content": base64_chunk,
+                **({"generation_id": generation.id} if callbacks.darija else {}),
             })
             last_chunk_sent = time.time()
 
@@ -921,6 +1013,10 @@ class TranscriptionCallbacks:
         self.message_queue = message_queue
         self.user_id = user_id
         self.loop = asyncio.get_running_loop()
+        self._text_lock = threading.RLock()
+        self.closed = False
+        self._blocked_through = 0
+        self._last_generation_id = 0
         self.final_transcription = ""
         self.last_user_speech_time = 0  # Track when user last spoke
         self.user_speech_received = False  # Track if user spoke
@@ -963,60 +1059,102 @@ class TranscriptionCallbacks:
         self.abort_worker_thread.start()
 
 
+    @property
+    def darija(self):
+        return getattr(self.conn_state.pipeline_manager, "tts_engine", "") == "silma"
+
+    def accepts(self, payload):
+        if self.closed:
+            return False
+        generation_id = payload.get("generation_id")
+        return not (payload.get("type") in {"tts_chunk", "assistant_partial", "partial_assistant_answer"}
+                    and isinstance(generation_id, int) and generation_id <= self._blocked_through)
+
+    def emit(self, payload):
+        payload = dict(payload)
+        generation = self.conn_state.pipeline_manager.running_generation
+        if self.darija and generation and payload.get("type") in {
+            "tts_chunk", "assistant_partial", "partial_assistant_answer", "final_assistant_answer",
+            "tts_interruption", "stop_tts",
+        }:
+            self._last_generation_id = generation.id
+            payload.setdefault("generation_id", generation.id)
+        if self.darija and not generation and payload.get("type") in {"stop_tts", "tts_interruption"} and self._last_generation_id:
+            payload.setdefault("generation_id", self._last_generation_id)
+        def enqueue():
+            if self.accepts(payload):
+                self.message_queue.put_nowait(payload)
+        if not self.closed and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(enqueue)
+
+    def invalidate_output(self):
+        with self._text_lock:
+            generation = self.conn_state.pipeline_manager.running_generation
+            self._blocked_through = max(self._blocked_through, generation.id if generation else self._last_generation_id)
+            return generation
+
     def reset_state(self):
         """Resets connection-specific state flags and variables to their initial values."""
         # Reset all connection-specific state flags
-        self.tts_to_client = False
-        self.user_interrupted = False
-        self.tts_chunk_sent = False
-        # Don't reset tts_client_playing here, it reflects client state reports
-        self.interruption_time = 0.0
+        with self._text_lock:
+            self.tts_to_client = False
+            self.user_interrupted = False
+            self.tts_chunk_sent = False
+            # Don't reset tts_client_playing here, it reflects client state reports
+            self.interruption_time = 0.0
 
-        # Reset other state variables
-        self.silence_active = True
-        self.is_hot = False
-        self.user_finished_turn = False
-        self.synthesis_started = False
-        self.assistant_answer = ""
-        self.final_assistant_answer = ""
-        self.is_processing_potential = False
-        self.is_processing_final = False
-        self.last_inferred_transcription = ""
-        self.final_assistant_answer_sent = False
-        self.partial_transcription = ""
+            # Reset other state variables
+            self.silence_active = True
+            self.is_hot = False
+            self.user_finished_turn = False
+            self.synthesis_started = False
+            self.assistant_answer = ""
+            self.final_assistant_answer = ""
+            self.is_processing_potential = False
+            self.is_processing_final = False
+            self.last_inferred_transcription = ""
+            self.final_assistant_answer_sent = False
+            self.partial_transcription = ""
+            self.final_transcription = ""
 
-        # Reset sentence tracking
-        self.sent_sentences.clear()
-        self.sentence_counter = 0
-        self.last_processed_length = 0
-        self._last_stream_time = 0.0
-        self._last_stream_length = 0
-        self._last_logged_length = 0
+            # Reset sentence tracking
+            self.sent_sentences.clear()
+            self.sentence_counter = 0
+            self.last_processed_length = 0
+            self._last_stream_time = 0.0
+            self._last_stream_length = 0
+            self._last_logged_length = 0
 
-        # Keep the abort call related to the audio processor/pipeline manager
-        self.conn_state.audio_processor.abort_generation()
+            # Keep the abort call related to the audio processor/pipeline manager
+            self.conn_state.audio_processor.abort_generation()
 
     def prepare_assistant_turn(self, keep_microphone_blocked: bool = False):
         """
         Prepares the connection state for an assistant-led turn.
         """
-        self.final_assistant_answer_sent = False
-        self.user_interrupted = False
-        self.tts_chunk_sent = False
-        self.tts_to_client = True
-        self.conn_state.lock_microphone_until_finish = keep_microphone_blocked
-        self._last_stream_time = 0.0
-        self._last_stream_length = 0
-        self._last_logged_length = 0
+        with self._text_lock:
+            self.final_assistant_answer_sent = False
+            self.assistant_answer = ""
+            self.final_assistant_answer = ""
+            self.user_interrupted = False
+            self.tts_chunk_sent = False
+            self.tts_to_client = True
+            self.conn_state.lock_microphone_until_finish = keep_microphone_blocked
+            self._last_stream_time = 0.0
+            self._last_stream_length = 0
+            self._last_logged_length = 0
 
-        if not self.conn_state.audio_processor.interrupted:
-            logger.info(f"{Colors.apply('🖥️🎙️ ⏸️ Microphone interrupted (assistant turn)').cyan}")
-            self.conn_state.audio_processor.interrupted = True
+            if self.darija:
+                self.conn_state.audio_processor.interrupted = False
+                return
+            if not self.conn_state.audio_processor.interrupted:
+                logger.info(f"{Colors.apply('🖥️🎙️ ⏸️ Microphone interrupted (assistant turn)').cyan}")
+                self.conn_state.audio_processor.interrupted = True
 
-        self.interruption_time = time.time()
+            self.interruption_time = time.time()
 
 
-    def send_progressive_text(self, text: str) -> None:
+    def send_progressive_text(self, text: str, generation_id=None) -> None:
         """
         Sends progressive updates of the assistant's response text as it grows.
         Uses throttling to avoid sending too many updates (minimum interval or length change).
@@ -1049,8 +1187,9 @@ class TranscriptionCallbacks:
             payload = {
                 "type": "assistant_partial",
                 "content": text.strip(),
+                **({"generation_id": generation_id} if generation_id is not None else {}),
             }
-            self.loop.call_soon_threadsafe(self.message_queue.put_nowait, payload)
+            self.emit(payload)
             logger.debug(f"🖥️💬 Streamed {text_length} chars: {text[:60]}...")
             
             # Update throttle tracking
@@ -1074,6 +1213,7 @@ class TranscriptionCallbacks:
 
     def shutdown(self) -> None:
         """Stops the per-connection abort worker thread."""
+        self.closed = True
         self.shutdown_event.set()
         self.abort_request_event.set()
         if self.abort_worker_thread.is_alive():
@@ -1089,12 +1229,15 @@ class TranscriptionCallbacks:
         Args:
             txt: The partial transcription text.
         """
+        if self.closed:
+            return
         self.final_assistant_answer_sent = False # New user speech invalidates previous final answer sending state
         self.final_transcription = "" # Clear final transcription as this is partial
         self.partial_transcription = txt
-        self.message_queue.put_nowait({"type": "partial_user_request", "content": txt})
+        self.emit({"type": "partial_user_request", "content": txt})
         self.abort_text = txt # Update text used for abort check
-        self.abort_request_event.set() # Signal the abort worker
+        if not self.darija:
+            self.abort_request_event.set() # Darija interruption follows VAD, not a stale partial.
 
     def safe_abort_running_syntheses(self, reason: str):
         """Placeholder for safely aborting syntheses (currently does nothing)."""
@@ -1104,6 +1247,8 @@ class TranscriptionCallbacks:
     def on_tts_allowed_to_synthesize(self):
         """Callback invoked when the system determines TTS synthesis can proceed."""
         # Access connection-specific manager state
+        if self.closed:
+            return
         if self.conn_state.pipeline_manager.running_generation and not self.conn_state.pipeline_manager.running_generation.abortion_started:
             self.conn_state.pipeline_manager.running_generation.tts_quick_allowed_event.set()
 
@@ -1116,6 +1261,8 @@ class TranscriptionCallbacks:
         Args:
             txt: The potential sentence text.
         """
+        if self.closed:
+            return
         logger.debug(f"🖥️🧠 Potential sentence: '{txt}'")
         if getattr(self.conn_state, "brain", None):
             return
@@ -1131,6 +1278,8 @@ class TranscriptionCallbacks:
         Args:
             txt: The potential final transcription text.
         """
+        if self.closed:
+            return
         logger.info(f"{Colors.apply('🖥️🧠 HOT: ').magenta}{txt}")
 
     def on_potential_abort(self):
@@ -1139,6 +1288,10 @@ class TranscriptionCallbacks:
         pass
 
     def on_before_final(self, audio: bytes, txt: str):
+        if not self.closed and not self.darija:
+            return self._commit_user_turn(audio, txt)
+
+    def _commit_user_turn(self, audio: bytes, txt: str):
         """
         Callback invoked just before the final STT result for a user turn is confirmed.
 
@@ -1151,6 +1304,8 @@ class TranscriptionCallbacks:
             txt: The transcription text (might be slightly refined in on_final).
         """
         # Get the user request content early to check if it's valid
+        if self.closed:
+            return
         user_request_content = self.final_transcription if self.final_transcription else self.partial_transcription
         
         # CRITICAL: Check if user actually said something meaningful
@@ -1172,7 +1327,7 @@ class TranscriptionCallbacks:
             self.conn_state.pipeline_manager.running_generation.tts_quick_allowed_event.set()
 
         # first block further incoming audio (Audio processor's state)
-        if not self.conn_state.audio_processor.interrupted:
+        if not self.darija and not self.conn_state.audio_processor.interrupted:
             logger.info(f"{Colors.apply('🖥️🎙️ ⏸️ Microphone interrupted (end of turn)').cyan}")
             self.conn_state.audio_processor.interrupted = True
             self.interruption_time = time.time() # Set connection-specific flag
@@ -1181,7 +1336,7 @@ class TranscriptionCallbacks:
         self.tts_to_client = True # Set connection-specific flag
 
         # Send final user request
-        self.message_queue.put_nowait({
+        self.emit({
             "type": "final_user_request",
             "content": user_request_content
         })
@@ -1192,7 +1347,7 @@ class TranscriptionCallbacks:
             # Use connection-specific user_interrupted flag
             if self.conn_state.pipeline_manager.running_generation.quick_answer and not self.user_interrupted:
                 self.assistant_answer = self.conn_state.pipeline_manager.running_generation.quick_answer
-                self.message_queue.put_nowait({
+                self.emit({
                     "type": "partial_assistant_answer",
                     "content": self.assistant_answer
                 })
@@ -1245,12 +1400,17 @@ class TranscriptionCallbacks:
             txt: The final transcription text.
         """
         # Only process if user actually said something
+        if self.closed:
+            return
         if txt and txt.strip() and len(txt.strip()) >= 2:
             log_event("👤", f"[User {self.user_id}] Said: \"{txt}\"")
             self.last_user_speech_time = time.time()  # Track when user spoke
             self.user_speech_received = True  # Flag that user spoke
             
-            if not self.final_transcription: # Store it if not already set by on_before_final logic
+            if self.darija:
+                self.final_transcription = txt
+                self._commit_user_turn(None, txt)
+            elif not self.final_transcription:
                 self.final_transcription = txt
         else:
             logger.debug(f"🖥️⚠️ Ignoring empty final transcription from user {self.user_id}")
@@ -1278,9 +1438,14 @@ class TranscriptionCallbacks:
             silence_active: True if silence is currently detected, False otherwise.
         """
         # logger.debug(f"🖥️🎙️ Silence active: {silence_active}") # Optional: Can be noisy
+        if self.closed:
+            return
         self.silence_active = silence_active
 
-    def on_partial_assistant_text(self, txt: str):
+    def bind_generation_text(self, generation_id):
+        return lambda text: self.on_partial_assistant_text(text, generation_id)
+
+    def on_partial_assistant_text(self, txt: str, generation_id=None):
         """
         Callback invoked when a partial text result from the assistant (LLM) is available.
 
@@ -1290,25 +1455,34 @@ class TranscriptionCallbacks:
         Args:
             txt: The partial assistant text (accumulates as LLM generates).
         """
-        txt = _strip_control_leak(txt)
-        # Always update assistant_answer with the latest text
-        self.assistant_answer = txt
+        with self._text_lock:
+            if self.closed:
+                return
+            generation = self.conn_state.pipeline_manager.running_generation
+            if generation_id is not None and (
+                generation is None or generation.id != generation_id or generation.abortion_started
+                or generation_id <= self._blocked_through
+            ):
+                return
+            txt = _strip_control_leak(txt)
+            # Always update assistant_answer with the latest text
+            self.assistant_answer = txt
         
-        # Only log when text changes significantly (not every token)
-        if not hasattr(self, '_last_logged_length') or len(txt) - self._last_logged_length > 50:
-            log_event("🤖", f"[User {self.user_id}] Assistant: {txt[:80]}{'...' if len(txt) > 80 else ''}")
-            self._last_logged_length = len(txt)
+            # Only log when text changes significantly (not every token)
+            if not hasattr(self, '_last_logged_length') or len(txt) - self._last_logged_length > 50:
+                log_event("🤖", f"[User {self.user_id}] Assistant: {txt[:80]}{'...' if len(txt) > 80 else ''}")
+                self._last_logged_length = len(txt)
             
-            # Check if this is the first response after user speech
-            if hasattr(self, 'user_speech_received') and self.user_speech_received and len(txt) > 20:
-                response_time = time.time() - self.last_user_speech_time
-                log_event("⏱️", f"[User {self.user_id}] Response started ({response_time:.1f}s after user spoke)")
-                self.user_speech_received = False  # Reset flag
+                # Check if this is the first response after user speech
+                if hasattr(self, 'user_speech_received') and self.user_speech_received and len(txt) > 20:
+                    response_time = time.time() - self.last_user_speech_time
+                    log_event("⏱️", f"[User {self.user_id}] Response started ({response_time:.1f}s after user spoke)")
+                    self.user_speech_received = False  # Reset flag
         
-        # Use connection-specific user_interrupted flag
-        if not self.user_interrupted:
-            # Send progressive text updates (throttled to avoid flooding)
-            self.send_progressive_text(txt)
+            # Use connection-specific user_interrupted flag
+            if not self.user_interrupted:
+                # Send progressive text updates (throttled to avoid flooding)
+                self.send_progressive_text(txt, generation_id)
 
     def on_recording_start(self):
         """
@@ -1320,6 +1494,8 @@ class TranscriptionCallbacks:
         
         Note: Recording start means VAD detected speech, so we trust it and interrupt immediately.
         """
+        if self.closed:
+            return
         if getattr(self.conn_state, "lock_microphone_until_finish", False):
             return
 
@@ -1327,19 +1503,22 @@ class TranscriptionCallbacks:
         
         # Only interrupt if TTS is playing
         # We trust the VAD - if recording started, there's likely speech
-        if self.tts_client_playing:
+        generation = self.conn_state.pipeline_manager.running_generation
+        if self.tts_client_playing or (self.darija and ((generation and not generation.abortion_started)
+                or not self.conn_state.pipeline_manager.requests_queue.empty())):
             logger.info(f"{Colors.apply('🖥️❗ INTERRUPTING TTS due to user speech').blue}")
             
+            self.invalidate_output()
             # CRITICAL: Send interruption messages FIRST (before anything else)
             # This ensures client stops playing audio immediately
             logger.info("🖥️🛑 Sending tts_interruption to client (IMMEDIATE).")
-            self.message_queue.put_nowait({
+            self.emit({
                 "type": "tts_interruption",
                 "content": ""
             })
             
             # Also send stop_tts for redundancy
-            self.message_queue.put_nowait({
+            self.emit({
                 "type": "stop_tts",
                 "content": ""
             })
@@ -1350,11 +1529,11 @@ class TranscriptionCallbacks:
             
             # Abort the generation (stops LLM and TTS workers)
             logger.info(f"{Colors.apply('🖥️🛑 ABORTING GENERATION').red}")
-            self.abort_generations("on_recording_start, user interrupts, TTS Playing")
+            self.send_final_assistant_answer(forced=True)
+            self.abort_generations("on_recording_start, user interrupts active generation")
             
             # Send final assistant answer *if* one was generated and not sent
-            logger.info(Colors.apply("🖥️✅ Sending final assistant answer (forced on interruption)").pink)
-            self.send_final_assistant_answer(forced=True)
+            logger.info(Colors.apply("🖥️✅ Interrupted assistant turn finalized").pink)
 
             # Reset for interruption
             self.tts_chunk_sent = False # Reset chunk sending flag
@@ -1376,94 +1555,95 @@ class TranscriptionCallbacks:
             forced: If True, attempts to send the last partial answer if no complete
                     final answer is available. Defaults to False.
         """
-        final_answer = ""
-        control_payload = None
+        with self._text_lock:
+            final_answer = ""
+            control_payload = None
         
-        # FIRST: Try to get the most complete text from pipeline manager
-        if self.conn_state.pipeline_manager.running_generation:
-            control_payload = self.conn_state.pipeline_manager.running_generation.control_payload
-            pipeline_answer = self.conn_state.pipeline_manager.running_generation.quick_answer + self.conn_state.pipeline_manager.running_generation.final_answer
-            # Use whichever is longer (more complete)
-            if len(pipeline_answer) > len(self.assistant_answer):
-                final_answer = pipeline_answer
-                logger.debug(f"🖥️✅ Using pipeline answer (longer): '{final_answer[:100]}...'")
-            else:
-                final_answer = self.assistant_answer
-                logger.debug(f"🖥️✅ Using assistant_answer: '{final_answer[:100]}...'")
-        # FALLBACK: Use self.assistant_answer if pipeline is not available
-        elif self.assistant_answer:
-            final_answer = self.assistant_answer
-            logger.debug(f"🖥️✅ Using assistant_answer (no pipeline): '{final_answer[:100]}...'")
-
-        if not final_answer: # Check if constructed answer is empty
-            brain = getattr(self.conn_state, "brain", None)
-            if brain and control_payload and not forced:
-                logger.info("🖥️🧭 Final assistant answer is empty, but an exam control payload is available. Applying silent transition.")
-                return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
-
-            logger.warning(f"🖥️⚠️ Final assistant answer was empty, not sending.")
-            return None # Nothing to send
-
-        logger.info(f"🖥️✅ Attempting to send final answer (length: {len(final_answer)}): '{final_answer[:150]}...' (Sent previously: {self.final_assistant_answer_sent})")
-
-        if not self.final_assistant_answer_sent and final_answer:
-            # Strip leaked control blocks, but keep the display text formatting
-            # exactly as streamed. TTS cleanup happens before synthesis; UI text
-            # must not collapse newlines or other intentional whitespace.
-            display_answer = _strip_control_leak(final_answer)
-            display_answer = display_answer.replace("\r\n", "\n").replace("\r", "\n")
-            log_preview = " ".join(display_answer.split())
-
-            brain = getattr(self.conn_state, "brain", None)
-            silenced_completed_exam_turn = False
-            if (
-                display_answer.strip()
-                and brain
-                and control_payload
-                and brain.should_silence_completed_turn(control_payload, forced=forced)
-            ):
-                logger.info(
-                    "🖥️🧭 Suppressing spoken assistant text because consuming this question completes the oral exam."
-                )
-                display_answer = ""
-                silenced_completed_exam_turn = True
-
-            if display_answer.strip(): # Ensure it's not empty after control stripping
-                # Check if response took too long (potential issue)
-                if hasattr(self, 'last_user_speech_time') and self.last_user_speech_time > 0:
-                    response_time = time.time() - self.last_user_speech_time
-                    if response_time > 10:
-                        log_event("⚠️", f"[User {self.user_id}] Slow response ({response_time:.1f}s)", "warning")
-                
-                log_event("✅", f"[User {self.user_id}] Complete (len={len(display_answer)}): \"{log_preview[:100]}{'...' if len(log_preview) > 100 else ''}\"")
-                self.user_speech_received = False  # Reset flag after response
-                self.message_queue.put_nowait({
-                    "type": "final_assistant_answer",
-                    "content": display_answer
-                })
-                # Use connection-specific conversation history
-                self.conn_state.conversation_history.append(_conversation_message("assistant", display_answer))
-                # Also update the shared pipeline manager's history
-                self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
-                self.final_assistant_answer_sent = True
-                self.final_assistant_answer = display_answer # Store the sent answer
-
-                if brain:
-                    return brain.mark_assistant_turn_delivered(display_answer, control_payload, forced=forced)
-            else:
-                if silenced_completed_exam_turn:
-                    logger.info("🖥️🧭 Silent oral-exam finish applied; no spoken assistant text sent.")
+            # FIRST: Try to get the most complete text from pipeline manager
+            if self.conn_state.pipeline_manager.running_generation:
+                control_payload = self.conn_state.pipeline_manager.running_generation.control_payload
+                pipeline_answer = self.conn_state.pipeline_manager.running_generation.quick_answer + self.conn_state.pipeline_manager.running_generation.final_answer
+                # Use whichever is longer (more complete)
+                if len(pipeline_answer) > len(self.assistant_answer):
+                    final_answer = pipeline_answer
+                    logger.debug(f"🖥️✅ Using pipeline answer (longer): '{final_answer[:100]}...'")
                 else:
-                    logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
-                self.final_assistant_answer_sent = False # Don't mark as sent
-                self.final_assistant_answer = "" # Clear the stored answer
-                if brain and control_payload and not forced:
-                    return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
-        elif forced and not final_answer: # Should not happen due to earlier check, but safety
-             logger.warning(f"🖥️⚠️ {Colors.YELLOW}Forced send of final assistant answer, but it was empty.{Colors.RESET}")
-             self.final_assistant_answer = "" # Clear the stored answer
+                    final_answer = self.assistant_answer
+                    logger.debug(f"🖥️✅ Using assistant_answer: '{final_answer[:100]}...'")
+            # FALLBACK: Use self.assistant_answer if pipeline is not available
+            elif self.assistant_answer:
+                final_answer = self.assistant_answer
+                logger.debug(f"🖥️✅ Using assistant_answer (no pipeline): '{final_answer[:100]}...'")
 
-        return None
+            if not final_answer: # Check if constructed answer is empty
+                brain = getattr(self.conn_state, "brain", None)
+                if brain and control_payload and not forced:
+                    logger.info("🖥️🧭 Final assistant answer is empty, but an exam control payload is available. Applying silent transition.")
+                    return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
+
+                logger.warning(f"🖥️⚠️ Final assistant answer was empty, not sending.")
+                return None # Nothing to send
+
+            logger.info(f"🖥️✅ Attempting to send final answer (length: {len(final_answer)}): '{final_answer[:150]}...' (Sent previously: {self.final_assistant_answer_sent})")
+
+            if not self.final_assistant_answer_sent and final_answer:
+                # Strip leaked control blocks, but keep the display text formatting
+                # exactly as streamed. TTS cleanup happens before synthesis; UI text
+                # must not collapse newlines or other intentional whitespace.
+                display_answer = _strip_control_leak(final_answer)
+                display_answer = display_answer.replace("\r\n", "\n").replace("\r", "\n")
+                log_preview = " ".join(display_answer.split())
+
+                brain = getattr(self.conn_state, "brain", None)
+                silenced_completed_exam_turn = False
+                if (
+                    display_answer.strip()
+                    and brain
+                    and control_payload
+                    and brain.should_silence_completed_turn(control_payload, forced=forced)
+                ):
+                    logger.info(
+                        "🖥️🧭 Suppressing spoken assistant text because consuming this question completes the oral exam."
+                    )
+                    display_answer = ""
+                    silenced_completed_exam_turn = True
+
+                if display_answer.strip(): # Ensure it's not empty after control stripping
+                    # Check if response took too long (potential issue)
+                    if hasattr(self, 'last_user_speech_time') and self.last_user_speech_time > 0:
+                        response_time = time.time() - self.last_user_speech_time
+                        if response_time > 10:
+                            log_event("⚠️", f"[User {self.user_id}] Slow response ({response_time:.1f}s)", "warning")
+
+                    log_event("✅", f"[User {self.user_id}] Complete (len={len(display_answer)}): \"{log_preview[:100]}{'...' if len(log_preview) > 100 else ''}\"")
+                    self.user_speech_received = False  # Reset flag after response
+                    self.emit({
+                        "type": "final_assistant_answer",
+                        "content": display_answer
+                    })
+                    # Use connection-specific conversation history
+                    self.conn_state.conversation_history.append(_conversation_message("assistant", display_answer))
+                    # Also update the shared pipeline manager's history
+                    self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
+                    self.final_assistant_answer_sent = True
+                    self.final_assistant_answer = display_answer # Store the sent answer
+
+                    if brain:
+                        return brain.mark_assistant_turn_delivered(display_answer, control_payload, forced=forced)
+                else:
+                    if silenced_completed_exam_turn:
+                        logger.info("🖥️🧭 Silent oral-exam finish applied; no spoken assistant text sent.")
+                    else:
+                        logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
+                    self.final_assistant_answer_sent = False # Don't mark as sent
+                    self.final_assistant_answer = "" # Clear the stored answer
+                    if brain and control_payload and not forced:
+                        return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
+            elif forced and not final_answer: # Should not happen due to earlier check, but safety
+                 logger.warning(f"🖥️⚠️ {Colors.YELLOW}Forced send of final assistant answer, but it was empty.{Colors.RESET}")
+                 self.final_assistant_answer = "" # Clear the stored answer
+
+            return None
 
 
 async def _build_voice_verification_manager(user_id: str | None, attempt_id: str | None, display_id: str):
@@ -1535,7 +1715,7 @@ async def run_session(
     await ws.send_json({
         "type": "status",
         "status": "initializing",
-        "message": "Setting up your oral exam session..."
+        "message": "Setting up your voice chat session..."
     })
 
     runtime_manager = app_state.RUNTIME_MANAGER
@@ -1548,13 +1728,16 @@ async def run_session(
 
     log_event("⚙️", f"[User {display_id}] Acquiring speech runtime...")
     try:
-        runtime = await runtime_manager.acquire(timeout=app_state.RUNTIME_ACQUIRE_TIMEOUT_SECONDS)
+        # Darija has one resident GPU runtime. Reject a second lease promptly,
+        # including races with the at_capacity diagnostic above.
+        acquire_timeout = 0 if getattr(app_state, "VOICE_PROFILE", "english") == "darija" else app_state.RUNTIME_ACQUIRE_TIMEOUT_SECONDS
+        runtime = await runtime_manager.acquire(timeout=acquire_timeout)
     except asyncio.TimeoutError:
         log_event("⏳", f"[User {display_id}] Timed out waiting for a speech runtime", level="warning")
         await ws.send_json({
             "type": "status",
             "status": "busy",
-            "message": "The oral exam backend is at capacity right now. Please retry in a moment."
+            "message": "The voice chat backend is at capacity right now. Please retry in a moment."
         })
         await ws.close(code=1013)
         return
@@ -1563,7 +1746,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "busy",
-            "message": "The oral exam backend is at capacity right now. Please retry in a moment."
+            "message": "The voice chat backend is at capacity right now. Please retry in a moment."
         })
         await ws.close(code=1013)
         return
@@ -1572,7 +1755,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "error",
-            "message": "The oral exam backend could not prepare its speech runtime. Please retry in a moment."
+            "message": "The voice chat backend could not prepare its speech runtime. Please retry in a moment."
         })
         await ws.close(code=1011)
         return
@@ -1617,7 +1800,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "error",
-            "message": "The oral exam backend could not prepare its speech runtime. Please retry in a moment."
+            "message": "The voice chat backend could not prepare its speech runtime. Please retry in a moment."
         })
         await ws.close(code=1011)
         return
@@ -1640,7 +1823,7 @@ async def run_session(
                 )
             ),
             asyncio.create_task(conn_state.audio_processor.process_chunk_queue(audio_chunks)),
-            asyncio.create_task(send_text_messages(ws, message_queue)),
+            asyncio.create_task(send_text_messages(ws, message_queue, callbacks)),
             asyncio.create_task(send_tts_chunks(conn_state, message_queue, callbacks)),
         ]
         
@@ -1648,7 +1831,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "ready",
-            "message": "Oral exam session ready. The exam agent is starting the exam."
+            "message": "Voice chat ready. You can speak now."
         })
         log_event("🚀", f"[User {display_id}] Exam session ready")
 
@@ -1661,44 +1844,64 @@ async def run_session(
 
         # Wait for any task to complete (e.g., client disconnect)
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if getattr(conn_state.audio_processor, "_transcription_failed", False):
+            callbacks.invalidate_output()
+            message_queue.put_nowait({"type": "stop_tts", "content": ""})
+            delivered = asyncio.get_running_loop().create_future()
+            message_queue.put_nowait({"type": "status", "status": "error",
+                "message": "Speech recognition stopped. Reconnect to start a new session.", "_delivered": delivered})
+            try:
+                await asyncio.wait_for(delivered, timeout=2)
+            except asyncio.TimeoutError:
+                pass
         for task in pending:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass  # Client/server cancellation still runs the shielded lease cleanup.
     except Exception as e:
         logger.error(f"🖥️💥 {Colors.apply('ERROR').red} in WebSocket session {connection_id}: {repr(e)}")
     finally:
-        log_event("👋", f"[User {display_id}] Disconnected")
+        # ASGI cancellation must not interrupt releasing a warmed runtime.
+        with anyio.CancelScope(shield=True):
+            log_event("👋", f"[User {display_id}] Disconnected")
         
-        # Save conversation transcript if the oral exam has not already been finished and saved.
-        if conn_state and len(conn_state.conversation_history) > 0 and not conn_state.session_finished:
-            log_event("💾", f"[User {display_id}] Saving session transcript ({len(conn_state.conversation_history)} messages)")
-            try:
-                await brain.save_progress(conn_state)
-            except Exception as exc:
-                logger.warning("🖥️⚠️ Could not save session progress: %s", exc)
-        elif conn_state and conn_state.session_finished:
-            log_event("ℹ️", f"[User {display_id}] Session already finished and saved, skipping transcript save")
-        
-        # Clear this connection's history
-        if conn_state:
-            conn_state.conversation_history = []
-        
-        # Cancel all tasks
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Clean up connection-specific resources
-        try:
             if callbacks:
                 callbacks.shutdown()
-
-            if runtime:
-                await app_state.RUNTIME_MANAGER.release(runtime)
-                logger.info(f"🖥️✅ Returned speech runtime for connection {connection_id}")
-        except Exception as e:
-            logger.error(f"🖥️⚠️ Error during cleanup for connection {connection_id}: {e}")
+            # Save conversation transcript if the oral exam has not already been finished and saved.
+            if conn_state and len(conn_state.conversation_history) > 0 and not conn_state.session_finished:
+                log_event("💾", f"[User {display_id}] Saving session transcript ({len(conn_state.conversation_history)} messages)")
+                try:
+                    await brain.save_progress(conn_state)
+                except Exception as exc:
+                    logger.warning("🖥️⚠️ Could not save session progress: %s", exc)
+            elif conn_state and conn_state.session_finished:
+                log_event("ℹ️", f"[User {display_id}] Session already finished and saved, skipping transcript save")
         
-        logger.info(f"🖥️❌ WebSocket session {connection_id} ended.")
+            # Clear this connection's history
+            if conn_state:
+                conn_state.conversation_history = []
+        
+            # Cancel all tasks
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        
+            # Clean up connection-specific resources
+            try:
+                if callbacks:
+                    callbacks.shutdown()
+
+                if runtime:
+                    await app_state.RUNTIME_MANAGER.release(runtime)
+                    logger.info(f"🖥️✅ Returned speech runtime for connection {connection_id}")
+            except Exception as e:
+                logger.error(f"🖥️⚠️ Error during cleanup for connection {connection_id}: {e}")
+        
+            try:
+                await ws.close()
+            except (RuntimeError, WebSocketDisconnect):
+                pass
+            logger.info(f"🖥️❌ WebSocket session {connection_id} ended.")

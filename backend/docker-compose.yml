@@ -21,6 +21,8 @@ services:
 
       # --- Other App Environment Variables ---
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VOICE_AGENT=${VOICE_AGENT:-chat}
+      - VOICE_PROFILE=${VOICE_PROFILE:-english}
       - MAX_AUDIO_QUEUE_SIZE=${MAX_AUDIO_QUEUE_SIZE:-50}
       - VOICE_RUNTIME_MIN_WARM=${VOICE_RUNTIME_MIN_WARM:-1}
       - VOICE_RUNTIME_MAX_CONCURRENT=${VOICE_RUNTIME_MAX_CONCURRENT:-1}

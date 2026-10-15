@@ -1,20 +1,22 @@
+from __future__ import annotations
+
 import logging
 logger = logging.getLogger(__name__)
 
-import transformers
 import collections
 import threading
 import queue
-import torch
 import time
 import re
 
 from core.config import get_env
+from core import darija_turn
+from core.darija_turn_text import normalize_turn_text
 
 # Configuration constants
 model_dir_local = "KoljaB/SentenceFinishedClassification"
 model_dir_cloud = "/root/models/sentenceclassification/"
-sentence_end_marks = ['.', '!', '?', '。'] # Characters considered sentence endings
+sentence_end_marks = ['.', '!', '?', '。', '؟'] # Characters considered sentence endings
 
 # Anchor points for probability-to-pause interpolation
 anchor_points = [
@@ -24,6 +26,7 @@ anchor_points = [
 
 
 def _resolve_turn_detection_device() -> torch.device:
+    import torch
     configured_device = (get_env("TURN_DETECTION_DEVICE", "auto") or "auto").strip().lower()
 
     if configured_device == "cpu":
@@ -200,74 +203,76 @@ class TurnDetection:
         local: bool = False,
         pipeline_latency: float = 0.5,
         pipeline_latency_overhead: float = 0.1,
+        profile: str = "english",
+        model_path: str | None = None,
     ) -> None:
-        """
-        Initializes the TurnDetection instance.
-
-        Loads the sentence classification model and tokenizer, sets up internal state
-        (deques, cache), starts the background processing thread, and performs model warmup.
-
-        Args:
-            on_new_waiting_time: Callback function invoked when a new waiting time is calculated.
-                                 It receives `(time: float, text: str)`.
-            local: If True, loads the model from `model_dir_local`, otherwise from `model_dir_cloud`.
-            pipeline_latency: Estimated base latency of the STT/processing pipeline in seconds.
-            pipeline_latency_overhead: Additional buffer added to the pipeline latency.
-        """
-        model_dir = model_dir_local if local else model_dir_cloud
-
+        if profile not in {"english", "darija"}:
+            raise ValueError("Unknown turn detection profile")
+        self.profile = profile
         self.on_new_waiting_time = on_new_waiting_time
-
-        self.current_waiting_time: float = -1 # Tracks the last suggested time
-        # Use deques with maxlen for efficient, bounded history storage
-        self.text_time_deque: collections.deque[tuple[float, str]] = collections.deque(maxlen=100)
-        self.texts_without_punctuation: collections.deque[tuple[str, str]] = collections.deque(maxlen=20)
-
-        self.text_queue: queue.Queue[str] = queue.Queue() # Queue for incoming text
-        self.text_worker = threading.Thread(
-            target=self._text_worker,
-            daemon=True # Allows program to exit even if this thread is running
-        )
+        self.pipeline_latency = pipeline_latency
+        self.pipeline_latency_overhead = pipeline_latency_overhead
+        self.current_waiting_time = -1
+        self.last_decision = None
+        self.text_time_deque = collections.deque(maxlen=100)
+        self.texts_without_punctuation = collections.deque(maxlen=20)
+        self._completion_probability_cache = collections.OrderedDict()
+        self._completion_probability_cache_max_size = 256
+        self._state_lock = threading.RLock()
+        self._inference_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._epoch = 0
+        self.text_queue = queue.Queue()
+        self.max_length = 128
+        self.temperature = 1.0
+        model_dir = model_path or (get_env("TURN_DETECTION_MODEL") if profile == "darija" else None)
+        if profile == "darija" and not model_dir:
+            raise ValueError("Darija turn detection requires the prepared model path")
+        model_dir = model_dir or (model_dir_local if local else model_dir_cloud)
+        self._load_model(model_dir)
+        self.update_settings(speed_factor=0.0)
+        # All model and timing state must exist before any queued work can run.
+        self.text_worker = threading.Thread(target=self._text_worker, daemon=True,
+                                            name="TurnDetectionWorker")
         self.text_worker.start()
 
-        self.device = _resolve_turn_detection_device()
-        logger.info(f"🎤🔌 Using device: {self.device}")
-        self.tokenizer = transformers.DistilBertTokenizerFast.from_pretrained(model_dir)
-        self.classification_model = transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
-        self.classification_model.to(self.device)
-        self.classification_model.eval() # Set model to evaluation mode
-        self.max_length: int = 128 # Max sequence length for the model
-        self.pipeline_latency: float = pipeline_latency
-        self.pipeline_latency_overhead: float = pipeline_latency_overhead
-
-        # Initialize completion probability cache with OrderedDict for LRU behavior
-        self._completion_probability_cache: collections.OrderedDict[str, float] = collections.OrderedDict()
-        self._completion_probability_cache_max_size: int = 256 # Max size for the LRU cache
-
-        # Warmup the classification model for faster initial predictions
-        logger.info("🎤🔥 Warming up the classification model...")
-        with torch.no_grad():
-            warmup_text = "This is a warmup sentence."
-            inputs = self.tokenizer(
-                warmup_text,
-                return_tensors="pt",
-                truncation=True,
-                padding="max_length",
-                max_length=self.max_length
+    def _load_model(self, model_dir):
+        import torch
+        import transformers
+        self._torch = torch
+        self.device = torch.device("cpu") if self.profile == "darija" else _resolve_turn_detection_device()
+        logger.info("Turn detector: profile=%s device=%s path=%s", self.profile, self.device, model_dir)
+        if self.profile == "darija":
+            from pathlib import Path
+            if not Path(model_dir).is_dir():
+                raise ValueError("Darija turn model must be a prepared local directory")
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+                model_dir, local_files_only=True, trust_remote_code=False,
             )
-            inputs = {key: value.to(self.device) for key, value in inputs.items()}
-            _ = self.classification_model(**inputs) # Run one prediction
-        logger.info("🎤✅ Classification model warmed up.")
+            self.classification_model = transformers.AutoModelForSequenceClassification.from_pretrained(
+                model_dir, local_files_only=True, trust_remote_code=False,
+            )
+            darija_turn.validate_model_config(self.classification_model.config)
+            self.tokenizer.truncation_side = "left"
+            self.temperature = darija_turn.TEMPERATURE
+        else:
+            self.tokenizer = transformers.DistilBertTokenizerFast.from_pretrained(model_dir)
+            self.classification_model = transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
+        self.classification_model.to(self.device)
+        self.classification_model.eval()
+        self._predict_probability(normalize_turn_text("سلام، بغيت نعرف فين وصل الطلب.")
+                                  if self.profile == "darija" else "This is a warmup sentence.")
+        logger.info("Turn detector warmed up")
 
-        # Default dynamic pause settings (initialized for speed_factor=0.0)
-        self.detection_speed: float = 0.5
-        self.ellipsis_pause: float = 2.3
-        self.punctuation_pause: float = 0.39
-        self.exclamation_pause: float = 0.35
-        self.question_pause: float = 0.33
-        self.unknown_sentence_detection_pause: float = 1.25
-        # Apply initial settings (can be called again later)
-        self.update_settings(speed_factor=0.0)
+    def _predict_probability(self, sentence):
+        inputs = self.tokenizer(sentence, return_tensors="pt", truncation=True,
+                                padding="max_length", max_length=self.max_length)
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        with self._torch.no_grad():
+            logits = self.classification_model(**inputs).logits.detach().cpu().tolist()
+        if len(logits) != 1:
+            raise ValueError("Turn classifier must return one pair of logits")
+        return darija_turn.calibrated_probability(logits[0], self.temperature)
 
     def update_settings(self, speed_factor: float) -> None:
         """
@@ -313,82 +318,40 @@ class TurnDetection:
         logger.info(f"🎤⚙️ Updated turn detection settings with speed_factor={speed_factor:.2f}")
 
 
-    def suggest_time(
-            self,
-            time_val: float, # Renamed from 'time' to avoid shadowing builtin
-            text: str = None
-        ) -> None:
-        """
-        Invokes the `on_new_waiting_time` callback with the suggested pause duration.
+    def suggest_time(self, time_val: float, text: str = None, epoch: int | None = None) -> None:
+        # Publish under the same lock used by reset. After reset returns, no
+        # callback or diagnostic from the old utterance can reach the recorder.
+        with self._state_lock:
+            if self._stop_event.is_set() or (epoch is not None and epoch != self._epoch):
+                return
+            if time_val == self.current_waiting_time:
+                return
+            self.current_waiting_time = time_val
+            if self.on_new_waiting_time:
+                self.on_new_waiting_time(time_val, text)
 
-        Only triggers the callback if the new suggested time is different from the
-        currently stored `current_waiting_time` to avoid redundant calls.
+    def get_completion_probability(self, sentence: str, epoch: int | None = None) -> float:
+        if self.profile == "darija":
+            sentence = normalize_turn_text(sentence)
+        with self._state_lock:
+            epoch = self._epoch if epoch is None else epoch
+            if sentence in self._completion_probability_cache:
+                self._completion_probability_cache.move_to_end(sentence)
+                return self._completion_probability_cache[sentence]
+        with self._inference_lock:
+            probability = 0.0 if self.profile == "darija" and not sentence else self._predict_probability(sentence)
+        with self._state_lock:
+            if epoch == self._epoch and not self._stop_event.is_set():
+                self._completion_probability_cache[sentence] = probability
+                self._completion_probability_cache.move_to_end(sentence)
+                if len(self._completion_probability_cache) > self._completion_probability_cache_max_size:
+                    self._completion_probability_cache.popitem(last=False)
+        return probability
 
-        Args:
-            time_val: The calculated suggested waiting time in seconds.
-            text: The text segment associated with this waiting time calculation.
-        """
-        if time_val == self.current_waiting_time:
-            return # No change, do nothing
-
-        self.current_waiting_time = time_val
-
-        if self.on_new_waiting_time:
-            self.on_new_waiting_time(time_val, text)
-
-    def get_completion_probability(
-        self,
-        sentence: str
-    ) -> float:
-        """
-        Calculates the probability that the given sentence is complete using the ML model.
-
-        Uses an internal LRU cache (`_completion_probability_cache`) to store and
-        retrieve results for previously seen sentences, improving performance.
-
-        Args:
-            sentence: The input sentence string to analyze.
-
-        Returns:
-            A float representing the probability (between 0.0 and 1.0) that the
-            sentence is considered complete by the model.
-        """
-        # Check cache first
-        if sentence in self._completion_probability_cache:
-            self._completion_probability_cache.move_to_end(sentence) # Mark as recently used
-            return self._completion_probability_cache[sentence]
-
-        # If not in cache, run model prediction
-        import torch
-        import torch.nn.functional as F
-
-        inputs = self.tokenizer(
-            sentence,
-            return_tensors="pt",
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_length
-        )
-        # Move input tensors to the correct device (CPU or GPU)
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}
-
-        with torch.no_grad(): # Disable gradient calculation for inference
-            outputs = self.classification_model(**inputs)
-
-        logits = outputs.logits
-        # Apply softmax to get probabilities [prob_incomplete, prob_complete]
-        probabilities = F.softmax(logits, dim=1).squeeze().tolist()
-        prob_complete = probabilities[1] # Index 1 corresponds to 'complete' label
-
-        # Store the result in the cache
-        self._completion_probability_cache[sentence] = prob_complete
-        self._completion_probability_cache.move_to_end(sentence) # Mark as recently used
-
-        # Maintain cache size (LRU eviction)
-        if len(self._completion_probability_cache) > self._completion_probability_cache_max_size:
-            self._completion_probability_cache.popitem(last=False) # Remove the least recently used item
-
-        return prob_complete
+    def get_completion_decision(self, text: str, epoch: int | None = None):
+        if self.profile != "darija":
+            raise ValueError("Calibrated Darija decisions require the Darija profile")
+        return darija_turn.decision(text, self.get_completion_probability(text, epoch))
 
     def get_suggested_whisper_pause(self, text: str) -> float:
         """
@@ -405,155 +368,103 @@ class TurnDetection:
         Returns:
             The suggested pause duration in seconds based on ending punctuation.
         """
-        if ends_with_string(text, "..."):
+        if ends_with_string(text, "...") or ends_with_string(text, "…"):
             return self.ellipsis_pause
         elif ends_with_string(text, "."):
             return self.punctuation_pause
         elif ends_with_string(text, "!"):
             return self.exclamation_pause
-        elif ends_with_string(text, "?"):
+        elif ends_with_string(text, "?") or ends_with_string(text, "؟"):
             return self.question_pause
         else:
             # No specific ending detected, use the general pause for unknown endings
             return self.unknown_sentence_detection_pause
 
-    def _text_worker(
-        self
-    ) -> None:
-        """
-        Background worker thread that processes text from the queue for turn detection.
-
-        Continuously retrieves text items from `self.text_queue`. For each item, it:
-        1. Preprocesses the text.
-        2. Updates text history deques.
-        3. Finds recent matching text segments to analyze punctuation consistency.
-        4. Calculates an average pause based on observed punctuation in matches.
-        5. Cleans the text further for the sentence completion model.
-        6. Gets the completion probability from the model (using cache).
-        7. Interpolates the model's probability to another pause value.
-        8. Combines the punctuation-based pause and model-based pause using weighting.
-        9. Applies a speed factor and adjustments (e.g., for ellipses).
-        10. Ensures the final pause meets minimum pipeline latency requirements.
-        11. Calls `suggest_time` with the final calculated pause duration.
-        Handles queue timeouts gracefully to allow for potential shutdown.
-        """
-        while True:
+    def _text_worker(self) -> None:
+        while not self._stop_event.is_set():
             try:
-                # Wait for text from the queue, with a timeout to avoid blocking forever
-                text = self.text_queue.get(block=True, timeout=0.1)
+                epoch, text = self.text_queue.get(timeout=0.1)
             except queue.Empty:
-                # No text received within the timeout, loop again
-                time.sleep(0.01) # Small sleep to yield CPU when idle
                 continue
+            try:
+                self._process_text(text, epoch)
+            except Exception:
+                # A failed classifier must not kill the worker or reuse an old
+                # high completion score. Retain the existing unknown/floor pause.
+                logger.exception("Turn classification failed for profile=%s", self.profile)
+                with self._state_lock:
+                    if epoch == self._epoch:
+                        self.last_decision = None
+                        fallback = max(self.unknown_sentence_detection_pause * self.detection_speed,
+                                       self.pipeline_latency + self.pipeline_latency_overhead)
+                        self.suggest_time(fallback, text, epoch)
+            finally:
+                self.text_queue.task_done()
 
-            # --- Processing starts when text is received ---
-            logger.info(f"🎤⚙️ Starting pause calculation for: \"{text}\"")
-            
-            processed_text = preprocess_text(text) # Apply initial cleaning
-
-            # Update history deques
-            current_time = time.time()
-            self.text_time_deque.append((current_time, processed_text))
-            text_without_punctuation = strip_ending_punctuation(processed_text)
-            self.texts_without_punctuation.append((processed_text, text_without_punctuation))
-
-            # Analyze recent matching texts for consistent punctuation pauses
+    def _process_text(self, text, epoch):
+        with self._state_lock:
+            if epoch != self._epoch or self._stop_event.is_set():
+                return
+            processed_text = text.strip() if self.profile == "darija" else preprocess_text(text)
+            self.text_time_deque.append((time.time(), processed_text))
+            self.texts_without_punctuation.append((processed_text, strip_ending_punctuation(processed_text)))
             matches = find_matching_texts(self.texts_without_punctuation)
-
-            added_pauses = 0
-            contains_ellipses = False
-            if matches: # Avoid division by zero if matches is empty
-                for i, match in enumerate(matches):
-                    same_text, _ = match # We only need the original text here
-                    whisper_suggested_pause_match = self.get_suggested_whisper_pause(same_text)
-                    added_pauses += whisper_suggested_pause_match
-                    if ends_with_string(same_text, "..."):
-                        contains_ellipses = True
-                # Calculate average pause based on recent consistent segments
-                avg_pause = added_pauses / len(matches)
-            else:
-                # If no matches, use the pause suggested by the current text directly
-                 avg_pause = self.get_suggested_whisper_pause(processed_text)
-                 if ends_with_string(processed_text, "..."):
-                    contains_ellipses = True
-
-            whisper_suggested_pause = avg_pause # Use the averaged pause
-
-            # Prepare text for the sentence completion model (remove all punctuation)
+            pauses = [self.get_suggested_whisper_pause(match[0]) for match in matches]
+            whisper_suggested_pause = sum(pauses) / len(pauses) if pauses else self.get_suggested_whisper_pause(processed_text)
+            contains_ellipses = any(ends_with_string(value, "...") or ends_with_string(value, "…")
+                                   for value, _ in matches or [(processed_text, "")])
+        if self.profile == "darija":
+            completion = self.get_completion_decision(processed_text, epoch)
+            prob_complete = completion.decision_score
+        else:
+            # Preserve the legacy English classifier's request normalization.
             import string
             transtext = processed_text.translate(str.maketrans('', '', string.punctuation))
-            # Further clean potentially remaining non-alphanumeric chars at the end
-            cleaned_for_model = re.sub(r'[^a-zA-Z\s]+$', '', transtext).rstrip() # Also remove trailing spaces
+            cleaned_for_model = re.sub(r'[^a-zA-Z\s]+$', '', transtext).rstrip()
+            prob_complete = self.get_completion_probability(cleaned_for_model, epoch)
+            completion = None
+        sentence_finished_model_pause = interpolate_detection(prob_complete)
+        weight_towards_whisper = 0.65
+        weighted_pause = (weight_towards_whisper * whisper_suggested_pause +
+                          (1 - weight_towards_whisper) * sentence_finished_model_pause)
+        final_pause = weighted_pause * self.detection_speed
+        if contains_ellipses:
+            final_pause += 0.2
+        final_pause = max(final_pause, self.pipeline_latency + self.pipeline_latency_overhead)
+        with self._state_lock:
+            if epoch != self._epoch or self._stop_event.is_set():
+                return
+            self.last_decision = completion
+            if completion is not None:
+                logger.info("Darija turn: probability=%.4f score=%.4f override=%s threshold=%.10f complete=%s pause=%.3f",
+                            completion.completion_probability, completion.decision_score,
+                            completion.syntax_override, completion.threshold, completion.is_complete, final_pause)
+            else:
+                logger.info("English turn: probability=%.4f pause=%.3f", prob_complete, final_pause)
+            self.suggest_time(final_pause, processed_text, epoch)
 
-            # Get sentence completion probability
-            prob_complete = self.get_completion_probability(cleaned_for_model)
-
-            # Interpolate probability to a pause duration
-            sentence_finished_model_pause = interpolate_detection(prob_complete)
-
-            # Combine pauses: weighted average giving more importance to punctuation pause
-            weight_towards_whisper = 0.65
-            weighted_pause = (weight_towards_whisper * whisper_suggested_pause +
-                             (1 - weight_towards_whisper) * sentence_finished_model_pause)
-
-            # Apply overall speed factor
-            final_pause = weighted_pause * self.detection_speed
-
-            # Add slight extra pause if ellipses were detected recently
-            if contains_ellipses:
-                final_pause += 0.2
-
-            logger.info(f"🎤📊 Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for \"{processed_text}\" (Prob={prob_complete:.2f})")
-
-
-            # Ensure final pause is not less than the pipeline latency overhead
-            min_pause = self.pipeline_latency + self.pipeline_latency_overhead
-            if final_pause < min_pause:
-                logger.info(f"🎤⚠️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum.")
-                final_pause = min_pause
-            
-            # Suggest the calculated time via callback
-            self.suggest_time(final_pause, processed_text) # Use processed_text for context
-
-            # Mark task as done for the queue (important if using queue.join())
-            self.text_queue.task_done()
-
-    def calculate_waiting_time(
-            self,
-            text: str) -> None:
-        """
-        Adds a text segment to the processing queue for waiting time calculation.
-
-        This is the entry point for feeding text into the turn detection system.
-        The actual calculation happens asynchronously in the background worker thread.
-
-        Args:
-            text: The text segment (e.g., from STT) to be processed.
-        """
-        logger.info(f"🎤📥 Queuing text for pause calculation: \"{text}\"")
-        self.text_queue.put(text)
+    def calculate_waiting_time(self, text: str) -> None:
+        with self._state_lock:
+            if not self._stop_event.is_set():
+                self.text_queue.put((self._epoch, text))
 
     def reset(self) -> None:
-        """
-        Resets the internal state of the TurnDetection instance.
-
-        Clears the text history deques, the model prediction cache, and resets the
-        current waiting time tracker. Useful for starting a new conversation or
-        interaction context.
-        """
-        logger.info("🎤🔄 Resetting TurnDetection state.")
-        # Clear the history deques
-        self.text_time_deque.clear()
-        self.texts_without_punctuation.clear()
-        # Reset the last suggested time
-        self.current_waiting_time = -1
-        # Clear the prediction cache
-        if hasattr(self, "_completion_probability_cache"):
+        with self._state_lock:
+            self._epoch += 1
+            self.text_time_deque.clear()
+            self.texts_without_punctuation.clear()
+            self.current_waiting_time = -1
+            self.last_decision = None
             self._completion_probability_cache.clear()
-        # Clear the processing queue (optional, might discard unprocessed items)
-        # while not self.text_queue.empty():
-        #     try:
-        #         self.text_queue.get_nowait()
-        #         self.text_queue.task_done()
-        #     except queue.Empty:
-        #         break
+            while True:
+                try:
+                    self.text_queue.get_nowait()
+                    self.text_queue.task_done()
+                except queue.Empty:
+                    break
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self.reset()
+        if threading.current_thread() is not self.text_worker:
+            self.text_worker.join(timeout=2)

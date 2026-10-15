@@ -26,6 +26,7 @@ class AudioInputProcessor:
             is_orpheus: bool = False,
             silence_active_callback: Optional[Callable[[bool], None]] = None,
             pipeline_latency: float = 0.5,
+            stt_config: dict | None = None,
         ) -> None:
         """
         Initializes the AudioInputProcessor.
@@ -44,6 +45,7 @@ class AudioInputProcessor:
             silence_active_callback=self._silence_active_callback,
             is_orpheus=is_orpheus,
             pipeline_latency=pipeline_latency,
+            **(stt_config or {}),
         )
         # Flag to indicate if the transcription loop has failed fatally
         self._transcription_failed = False

@@ -10,6 +10,8 @@ class TTSPlaybackProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (event) => {
       // Check if this is a control message (object with a "type" property).
       if (event.data && typeof event.data === 'object' && event.data.type === 'clear') {
+        // Keep the server playback state in sync when buffered audio is cleared.
+        if (this.isPlaying) this.port.postMessage({ type: 'ttsPlaybackStopped' });
         // Clear the TTS buffer and reset playback state.
         this.bufferQueue = [];
         this.readOffset = 0;

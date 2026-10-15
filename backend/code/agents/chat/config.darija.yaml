@@ -1,0 +1,10 @@
+# Darija microphone chat: prepared ASR/turn artifacts are validated before warmup.
+language: ar
+stt_model: ${STT_MODEL}
+stt_realtime_model: ${STT_MODEL}
+tts_engine: silma
+llm_provider: vllm
+llm_model: MBZUAI-Paris/Atlas-Chat-2B
+llm_chat_format: atlas
+llm_max_tokens: 256
+llm_context_limit: 4096

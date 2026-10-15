@@ -1,0 +1,8 @@
+[
+  {"name":"greeting_and_history","turns":["السلام عليكم، سميتي Sara وبغيت نسولك.","شنو سميتي؟"],"review":"Natural Arabic-script Darija; remembers Sara without inventing facts."},
+  {"name":"clarify_unknown_order","turns":["بغيت نعرف فين وصل الطلب ديالي.","رقم الطلب هو AB-1203."],"review":"Asks for missing information; does not invent shipping status or database access."},
+  {"name":"factual_identifiers","turns":["عاود ليا هاد المعلومات كيف ما هي: الاسم Jean-Luc، رقم الطلب AB-1203، التليفون 0612345678، والثمن 12.50 درهم."],"review":"Preserves names, digits, order IDs and decimal values; no Arabizi conversion."},
+  {"name":"foreign_terms","turns":["الapplication ديال delivery ما خداماش، شنو ندير؟"],"review":"Surrounding answer stays in Darija despite French/English input terms."},
+  {"name":"negation_and_short_acknowledgment","turns":["ما بغيتش نلغي الطلب، بغيت غير نبدل العنوان.","واخا، شكرا."],"review":"Respects negation; brief natural acknowledgment."},
+  {"name":"longer_spoken_reply","turns":["عطيني ثلاثة خطوات باش نحل مشكل الاتصال بالويفي، بالدارجة وبلا جواب طويل."],"review":"Useful concise spoken reply; no markdown or model role markers."}
+]

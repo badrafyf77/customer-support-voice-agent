@@ -1,0 +1,12 @@
+{
+  "model_id": "afyfbadreddine77/darija-turn-detection",
+  "revision": "a6b5bc2249d83bd0d05c5c4c3d8f5e1eafe204e4",
+  "metadata_hashes_verified": true,
+  "normalization": "darija_v1",
+  "policy": "darija_calls_v2",
+  "temperature": 3.9,
+  "threshold": 0.7780777968696678,
+  "truncation_side": "left",
+  "last_128_tokens_verified": true,
+  "weights_loaded": false
+}

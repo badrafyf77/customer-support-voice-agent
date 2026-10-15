@@ -1,0 +1,17 @@
+{
+  "model_id": "MBZUAI-Paris/Atlas-Chat-2B",
+  "revision": "a6244a4c50bc32b65c6c8dc4dc1dab218b580088",
+  "chat_template": "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model\n'}}{% endif %}",
+  "special_token_ids": {
+    "<bos>": 2,
+    "<eos>": 1,
+    "<start_of_turn>": 106,
+    "<end_of_turn>": 107
+  },
+  "eos_token_ids": [
+    1,
+    107
+  ],
+  "context_limit": 4096,
+  "response_limit": 256
+}

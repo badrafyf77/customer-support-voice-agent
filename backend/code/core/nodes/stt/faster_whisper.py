@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 
 from core.config import get_env, read_bool_env
 from core.turndetect import strip_ending_punctuation
+from core.nodes.stt.configuration import darija_recorder_config, normalize_transcript_comparison
 from core.colors import Colors
 from core.text_similarity import TextSimilarity
 import numpy as np
@@ -116,6 +117,8 @@ class FasterWhisperSTTProvider:
             tts_allowed_event: Optional[threading.Event] = None, # Note: This seems unused in the original code provided
             pipeline_latency: float = 0.5,
             recorder_config: Optional[Dict[str, Any]] = None, # Allow passing custom config
+            profile: str = "english",
+            turn_model_path: Optional[str] = None,
     ) -> None:
         """
         Initializes the TranscriptionProcessor.
@@ -136,6 +139,7 @@ class FasterWhisperSTTProvider:
             pipeline_latency: Estimated latency of the downstream processing pipeline in seconds. Used for timing calculations.
             recorder_config: Optional dictionary to override default RealtimeSTT recorder configuration.
         """
+        self.profile = profile
         self.source_language = source_language
         self.realtime_transcription_callback = realtime_transcription_callback
         self.full_transcription_callback = full_transcription_callback
@@ -169,16 +173,29 @@ class FasterWhisperSTTProvider:
         # Use provided config or default
         self.recorder_config = copy.deepcopy(recorder_config if recorder_config else DEFAULT_RECORDER_CONFIG)
         self.recorder_config['language'] = self.source_language # Ensure language is set
+        if profile == "darija":
+            self.recorder_config = darija_recorder_config(
+                self.recorder_config, self.recorder_config["model"],
+                self.recorder_config.get("realtime_model_type"),
+            )
+            self.source_language = "ar"
+        elif profile != "english":
+            raise ValueError("Unknown STT profile")
 
         if USE_TURN_DETECTION:
             logger.info(f"👂🔄 {Colors.YELLOW}Turn detection enabled{Colors.RESET}")
             self.turn_detection = TurnDetection(
                 on_new_waiting_time=self.on_new_waiting_time,
                 local=local,
-                pipeline_latency=pipeline_latency
+                pipeline_latency=pipeline_latency,
+                profile=profile, model_path=turn_model_path,
             )
 
         self._create_recorder()
+        self._initial_silence_duration = self._get_recorder_param(
+            "post_speech_silence_duration",
+            self.recorder_config.get("post_speech_silence_duration", DEFAULT_RECORDER_CONFIG["post_speech_silence_duration"]),
+        )
         self._start_silence_monitor()
 
     # --- Recorder Parameter Abstraction ---
@@ -443,12 +460,7 @@ class FasterWhisperSTTProvider:
         Returns:
             The normalized string.
         """
-        text = text.lower()
-        # Remove all non-alphanumeric characters (keeping spaces)
-        text = re.sub(r'[^a-z0-9\s]', '', text) # Keep spaces for downstream similarity checks
-        # Remove extra whitespace and trim
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
+        return normalize_transcript_comparison(text)
 
     def is_basically_the_same(
             self,
@@ -498,10 +510,10 @@ class FasterWhisperSTTProvider:
             return
 
         # Don't consider ellipses as sentence end unless forced
-        if stripped_text_raw.endswith("...") and not force_ellipses:
+        if stripped_text_raw.endswith(("...", "…")) and not force_ellipses:
             return
 
-        end_punctuations = [".", "!", "?"]
+        end_punctuations = [".", "!", "?", "؟"]
         now = time.time()
 
         # Only proceed if text ends with a standard punctuation mark or if forced
@@ -862,6 +874,10 @@ class FasterWhisperSTTProvider:
                 the processor can be rebound safely to a new WebSocket session.
         """
         logger.info("👂🧹 Resetting TranscriptionProcessor session state.")
+        if USE_TURN_DETECTION and hasattr(self, 'turn_detection'):
+            self.turn_detection.reset()
+        self._set_recorder_param("post_speech_silence_duration",
+                                 self._initial_silence_duration)
         self.realtime_text = None
         self.sentence_end_cache.clear()
         self.potential_sentences_yielded.clear()
@@ -870,9 +886,6 @@ class FasterWhisperSTTProvider:
         self.silence_time = 0.0
         self.silence_active = False
         self.last_audio_copy = None
-
-        if USE_TURN_DETECTION and hasattr(self, 'turn_detection'):
-            self.turn_detection.reset()
 
         if clear_callbacks:
             self.realtime_transcription_callback = None

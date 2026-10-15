@@ -1,0 +1,9 @@
+[
+  {"name":"complete_utterance","text":"بغيت نبدل العنوان ديال التوصيل.","expected_complete":true,"review":"Coherent request; review the learned probability and transcript."},
+  {"name":"dangling_clause","text":"رقم الطلب ديال","expected_complete":false,"expected_override":0},
+  {"name":"short_acknowledgment","text":"واخا فهمت","expected_complete":true,"expected_override":1},
+  {"name":"hesitation","text":"خلي نفكر شوية","expected_complete":false,"expected_override":0},
+  {"name":"numbers_and_names","text":"Sara، رقم الطلب AB-1203 والتليفون 0612345678.","expected_complete":true,"review":"Verify each identifier in recognized text; no digit rewriting or extra digit pause."},
+  {"name":"unfinished_question","text":"بغيت نعرف واش","expected_complete":false,"expected_override":0},
+  {"name":"arabic_question","text":"واش الطلب ديالي واجد؟","expected_complete":true,"review":"Arabic question punctuation uses the existing question pause."}
+]
