@@ -250,3 +250,13 @@ Next: phase 6 measurement and repeatable setup.
 
 Commands: backend/studio/RUNBOOK.md. Scope: docs/darija/PHASE6_STATUS.md.
 Phase 6 is the last planned phase; live final acceptance is still open.
+
+### Deployment preference update — 15 October 2026
+
+The user already has NVIDIA, Docker and Docker Compose installed on Studio and
+requested a simpler deployment: `backend/.env` including HF_TOKEN, Docker Compose
+build/start, an exposed Lightning backend port, and its URL in the local frontend
+environment. This supersedes native host environments, Lightning Secrets and
+SSH tunneling as the primary setup. See backend/studio/DOCKER.md. The corrected
+ASR export still needs a one-time upload/path; other pinned models are prepared
+automatically by Compose. Live L4 acceptance remains pending.

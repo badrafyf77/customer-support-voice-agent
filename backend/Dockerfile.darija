@@ -1,0 +1,55 @@
+# Dependencies are installed inside images; the Studio needs only Docker/GPU support.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS base
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/code \
+    DARIJA_STATE_ROOT=/opt/darija \
+    DARIJA_MODEL_ROOT=/models \
+    HF_HOME=/cache/huggingface \
+    TORCH_HOME=/cache/torch \
+    UV_LINK_MODE=copy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-dev python3.10-venv python3-pip \
+    build-essential ninja-build pkg-config git ffmpeg libsndfile1 \
+    libportaudio2 portaudio19-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3.10 -m pip install --no-cache-dir uv==0.10.11
+WORKDIR /app
+
+FROM base AS backend-deps
+COPY studio/backend.lock /tmp/backend.lock
+RUN uv venv --python /usr/bin/python3.10 /opt/darija/backend \
+    && uv pip sync --python /opt/darija/backend/bin/python /tmp/backend.lock
+
+FROM backend-deps AS backend
+COPY code/ /app/code/
+COPY studio/ /app/studio/
+RUN chmod +x /app/studio/container_entrypoint.sh
+EXPOSE 8080
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["backend"]
+
+FROM base AS vllm-deps
+COPY studio/vllm.lock /tmp/vllm.lock
+RUN uv venv --python /usr/bin/python3.10 /opt/darija/vllm \
+    && uv pip sync --python /opt/darija/vllm/bin/python /tmp/vllm.lock
+
+FROM vllm-deps AS vllm
+COPY code/ /app/code/
+COPY studio/ /app/studio/
+RUN chmod +x /app/studio/container_entrypoint.sh
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["vllm"]
+
+FROM base AS silma-deps
+COPY studio/silma.lock /tmp/silma.lock
+RUN uv venv --python /usr/bin/python3.10 /opt/darija/silma \
+    && uv pip sync --python /opt/darija/silma/bin/python /tmp/silma.lock
+
+FROM silma-deps AS silma
+COPY code/ /app/code/
+COPY studio/ /app/studio/
+RUN chmod +x /app/studio/container_entrypoint.sh
+ENTRYPOINT ["/app/studio/container_entrypoint.sh"]
+CMD ["silma"]

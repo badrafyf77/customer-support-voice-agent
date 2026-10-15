@@ -10,10 +10,11 @@ inside each folder under [`code/agents`](./code/agents).
 ## Darija deployment
 
 For the Lightning L4 backend and local frontend, follow
-[studio/RUNBOOK.md](studio/RUNBOOK.md). It covers the Darija branch, three isolated
-environments, pinned model preparation, the selected voice1/main checkpoint,
-SSH tunneling and live measurement. GPU tuning/acceptance remain pending a Studio
-run; use the native Studio launchers instead of the legacy Docker stack below.
+[studio/DOCKER.md](studio/DOCKER.md). Configure `backend/.env`, upload the corrected
+ASR export once, and run `docker compose up -d --build`. Expose port 8080 through
+Lightning and put its HTTPS URL in the local frontend's `.env.local`. The default
+Compose file runs Darija; the previous English recipe is `docker-compose.english.yml`.
+GPU tuning/acceptance remain pending a Studio run.
 
 ## Runtime Flow
 
@@ -61,14 +62,15 @@ code/
 From `backend`:
 
 ```bash
-cp .env.example .env
+cp -n .env.example .env
+# Edit HF_TOKEN and ASR_EXPORT_DIR in .env before starting.
 docker compose up -d --build
 ```
 
 Default ports:
 
 - Backend app: `http://localhost:8080`
-- vLLM OpenAI-compatible server: `http://localhost:8000`
+- Atlas/SILMA are internal services without published host ports.
 
 Useful checks:
 
@@ -125,10 +127,12 @@ To add a new agent:
 
 ## Configuration
 
-For the Darija phase 1 setup, pinned model preparation, isolated Lightning L4
-environments, and SSH tunnel instructions, see [studio/README.md](./studio/README.md).
+For Docker Compose, `.env`, pinned model preparation and Lightning's exposed
+backend URL, see [studio/DOCKER.md](./studio/DOCKER.md). The optional native
+setup and artifact provenance remain in [studio/README.md](./studio/README.md).
 Select startup with `VOICE_AGENT=chat|exam` and
-`VOICE_PROFILE=english|darija`. The default is chat/english. The Darija preparation
+`VOICE_PROFILE=english|darija`. Python's default is chat/english; the default Compose
+file explicitly selects chat/darija. The Darija preparation
 profile now loads the corrected ASR and calibrated CPU turn detector.
 [Phase 4 configuration and replay instructions](studio/STT.md) describe the
 unchanged dynamic timing and the deferred Studio checks.
@@ -146,9 +150,9 @@ Common variables:
 | --- | --- |
 | `LLM_PROVIDER` | `vllm` or `openai`. Docker default is `vllm`. |
 | `LLM_MODEL` | Model name sent to the configured LLM provider. |
-| `VLLM_BASE_URL` | OpenAI-compatible vLLM URL, usually `http://vllm:8000/v1` in Docker. |
+| `VLLM_BASE_URL` | Darija Compose sets `http://vllm:8001/v1` internally. |
 | `OPENAI_API_KEY` | Required only when `LLM_PROVIDER=openai`. |
-| `STT_MODEL` | Main faster-whisper model, default `medium.en`. |
+| `STT_MODEL` | Darija Compose sets the verified local `/models/asr` export. |
 | `STT_REALTIME_MODEL` | Optional realtime model when not sharing the main STT model. |
 | `STT_USE_MAIN_MODEL_FOR_REALTIME` | Use one STT model for both realtime and final transcription. |
 | `TURN_DETECTION_DEVICE` | Device for turn detection, usually `cpu` or `cuda`. |
@@ -190,6 +194,8 @@ Runs a voice session with the selected agent.
 
 Local backend runs are useful for quick code iteration, but the Docker stack is
 more representative because it handles GPU/runtime dependencies and vLLM.
+For native Darija, use [the optional pinned native setup](studio/RUNBOOK.md).
+The commands below describe the legacy English development environment.
 
 ```bash
 cd backend
@@ -211,10 +217,10 @@ LLM_MODEL=gpt-5
 ## Frontend Integration
 
 The frontend connects to this backend through `NEXT_PUBLIC_VOICE_SERVER_URL`.
-For the default Docker backend:
+For Studio, expose the configured backend port and use its HTTPS base URL:
 
 ```bash
-NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
+NEXT_PUBLIC_VOICE_SERVER_URL=https://YOUR-LIGHTNING-BACKEND-URL
 ```
 
 See [`../frontend/README.md`](../frontend/README.md).

@@ -10,6 +10,10 @@ The backend includes an oral-exam agent and a simple chat agent. The architectur
 is intentionally modular so another agent, such as customer support, can be added
 under `backend/code/agents/`.
 
+On the Darija branch, use [the Lightning Docker Compose guide](backend/studio/DOCKER.md):
+put the token/settings in `backend/.env`, run Compose on Studio, expose port 8080,
+and put its HTTPS URL in `frontend/.env.local` on your local computer.
+
 ## Project Structure
 
 ```text
@@ -20,7 +24,8 @@ under `backend/code/agents/`.
 │   │   ├── core/                # session, transport, STT/TTS nodes, pipeline
 │   │   ├── services/            # database, LLM API, voice verification
 │   │   └── server.py            # FastAPI entrypoint
-│   ├── docker-compose.yml       # backend + vLLM stack
+│   ├── docker-compose.yml       # Darija preparation + Atlas + SILMA + backend
+│   ├── Dockerfile.darija        # three pinned CUDA/Python targets
 │   ├── Dockerfile
 │   └── README.md
 └── frontend/
@@ -50,18 +55,20 @@ For a backend file-by-file architecture map, see
 
 ### 1. Start The Backend
 
-The default backend stack runs FastAPI plus vLLM.
+The default stack runs Darija chat with pinned ASR/turn, Atlas and SILMA models.
+Upload the corrected ASR export once using the [guide](backend/studio/DOCKER.md#2-upload-the-asr-export-once).
 
 ```bash
 cd backend
-cp .env.example .env
+cp -n .env.example .env
+# Edit HF_TOKEN and ASR_EXPORT_DIR in .env.
 docker compose up -d --build
 ```
 
 Backend URLs:
 
 - App: `http://localhost:8080`
-- vLLM: `http://localhost:8000`
+- vLLM and SILMA stay internal; only the backend port is published.
 
 Check it:
 
@@ -72,12 +79,13 @@ docker compose logs -f app
 
 ### 2. Start The Frontend
 
-In another terminal:
+Expose backend port 8080 in Lightning's Ports panel. In your local checkout:
 
 ```bash
 cd frontend
-cp .env.example .env.local
-npm install
+cp -n .env.example .env.local
+# Set NEXT_PUBLIC_VOICE_SERVER_URL to the exposed Lightning HTTPS base URL.
+npm ci
 npm run dev
 ```
 
@@ -87,10 +95,10 @@ Open:
 http://localhost:3000
 ```
 
-The frontend defaults to:
+For the remote Studio backend, use:
 
 ```bash
-NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
+NEXT_PUBLIC_VOICE_SERVER_URL=https://YOUR-LIGHTNING-BACKEND-URL
 ```
 
 ## Runtime Modes
@@ -104,6 +112,9 @@ This uses:
 - `backend/code/agents/chat/agent.py`
 
 ### Exam Mode
+
+Exam mode belongs to the English configuration. The default Darija Compose stack
+supports general chat only and rejects exam query parameters.
 
 Connect to `/ws` with one or more exam identifiers:
 
@@ -141,7 +152,7 @@ NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
 
 | Provider | Use Case | Required Settings |
 | --- | --- | --- |
-| `vllm` | Default local/GPU stack | `LLM_PROVIDER=vllm`, `VLLM_BASE_URL=http://vllm:8000/v1` |
+| `vllm` | Default Darija/GPU stack | Atlas configured by Compose at `http://vllm:8001/v1` |
 | `openai` | External API testing | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=...`, `LLM_MODEL=...` |
 
 ## Development Notes

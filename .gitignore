@@ -58,3 +58,6 @@ backend/studio/.cache/
 # Browser test artifacts and TypeScript incremental cache
 frontend/tests/.artifacts/
 frontend/tsconfig.tsbuildinfo
+
+# Local model transfer folder for Docker Compose
+backend/models/

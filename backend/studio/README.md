@@ -1,7 +1,9 @@
 # Darija on Lightning L4
 
-**Start with [RUNBOOK.md](RUNBOOK.md)** for the complete Studio backend + local
-frontend setup, ASR transfer, start/stop commands and phase 6 measurements.
+**Start with [DOCKER.md](DOCKER.md)** for the preferred Docker Compose deployment:
+configure `backend/.env`, run Compose, expose the backend port in Lightning, and
+set that URL in the local frontend's `.env.local`. No host Python setup or SSH
+tunnel is required. [RUNBOOK.md](RUNBOOK.md) retains the optional native setup.
 The older sections below retain artifact provenance and independent-load details.
 Phase 6 tools are implemented; actual L4 tuning and live acceptance are pending
 the user's Studio run. The selected voice is voice1 + main at 32 steps.

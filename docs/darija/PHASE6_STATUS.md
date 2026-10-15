@@ -1,5 +1,14 @@
 # Phase 6 implementation — 15 October 2026
 
+Deployment update: the user prefers Docker Compose with `backend/.env` for
+HF_TOKEN/configuration and an exposed Lightning port used by the local frontend.
+[DOCKER.md](../../backend/studio/DOCKER.md) is now the primary guide. The default
+Compose file builds three isolated pinned CUDA environments, runs model
+preparation, and starts Atlas/SILMA/backend in dependency order. Only the backend
+port is published; models/cache volumes persist. The prior English recipe and
+native instructions remain available separately. Local Compose rendering and
+readiness tests pass; full Linux GPU image builds remain unverified locally.
+
 Implemented locally:
 
 - Complete [Lightning/local runbook](../../backend/studio/RUNBOOK.md), with native
@@ -29,7 +38,7 @@ Existing regression checks cover Arabic normalization, calibrated turn policy,
 Atlas formatting/stops, phrase ordering/tails, cancellation, stale results and
 browser reset/reconnect. Additional phase 6 checks cover measurement summaries,
 turn-boundary gap handling and owned-process shutdown.
-All 89 backend tests, frontend unit/type checks, nine production-frontend
+All 95 backend tests (including six Compose/readiness checks), frontend unit/type checks, nine production-frontend
 Chromium check groups, trace privacy/restore checks and syntax checks pass locally.
 Saved scope: [phase6-verification.json](phase6-verification.json).
 

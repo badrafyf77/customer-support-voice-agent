@@ -1,9 +1,13 @@
-# Run Darija on Lightning L4 and the frontend locally
+# Optional native deployment on Lightning L4
+
+**The requested deployment is now [Docker Compose with .env and an exposed
+Lightning port](DOCKER.md).** Use that guide for the simple setup. The instructions
+below retain the alternative native/SSH workflow and are not needed for Compose.
 
 Branch: `codex/darija-voice-model-review`. Selected speech: **voice1 + main, 32 steps**.
 One Studio, one GPU, one conversation; turn detection/VAD run on CPU.
-Use the native isolated environments below. The old Docker recipe is not the
-Darija Studio deployment path.
+The native isolated environments below are an alternative to the Darija Compose
+images. The old English Docker recipe is kept separately.
 
 Phase 6 supplies repeatable launch and measurement tools. **The Linux installs,
 combined L4 budget, actual recognition, speech quality and live latency remain

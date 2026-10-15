@@ -1,0 +1,16 @@
+.env
+.env.*
+**/.env
+**/.env.*
+**/__pycache__
+**/*.pyc
+**/.venv
+**/node_modules
+**/*.log
+**/*.pem
+**/*.key
+studio/.runtime
+studio/.models
+studio/.cache
+models
+tests

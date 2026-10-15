@@ -50,6 +50,10 @@ arrives after cancellation.
 
 ## Later Studio browser run
 
+For the user's preferred Compose/`.env`/exposed-port deployment, use
+[DOCKER.md](DOCKER.md). The native tunnel commands below are an alternative.
+The live conversation checklist applies to either deployment.
+
 Prepare all pinned artifacts using [README.md](README.md), start vLLM with
 [ATLAS.md](ATLAS.md), and start SILMA with [SILMA.md](SILMA.md). Export the paths and
 settings from `backend/.env.studio.example`, keeping HF_TOKEN in runtime secrets.

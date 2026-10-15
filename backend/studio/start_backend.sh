@@ -11,4 +11,4 @@ fi
 cuda_libs="$("$state_root/backend/bin/python" -c 'import pathlib, site; print(":".join(str(p) for root in site.getsitepackages() for p in pathlib.Path(root).glob("nvidia/*/lib")))')"
 export LD_LIBRARY_PATH="$cuda_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$state_root/backend/bin/python" -m uvicorn server:app \
-    --app-dir "$studio_dir/../code" --host 127.0.0.1 --port 8080 --workers 1
+    --app-dir "$studio_dir/../code" --host "${VOICE_BIND_HOST:-127.0.0.1}" --port 8080 --workers 1

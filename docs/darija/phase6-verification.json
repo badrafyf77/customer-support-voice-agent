@@ -1,7 +1,10 @@
 {
   "date": "2026-10-15",
   "scope": "Local regression and production-frontend integration with deterministic model boundaries",
-  "backend_unittest_count": 89,
+  "backend_unittest_count": 95,
+  "compose_configuration_and_readiness_tests": "6 passed using Docker Compose 5.1.3",
+  "docker_cuda_base_manifest": "verified linux/amd64 tag availability",
+  "docker_image_builds": "not run; local Docker daemon is not running",
   "frontend_generation_and_worklet_tests": "passed",
   "frontend_typecheck": "passed",
   "production_frontend_chromium_checks": 9,
@@ -16,5 +19,5 @@
   "vllm_budget": {"candidate": 0.4, "tested_and_adopted": null},
   "tts": {"voice": "voice1", "variant": "main", "steps": 32},
   "final_acceptance": "pending_user_studio_run",
-  "instructions": "backend/studio/RUNBOOK.md"
+  "instructions": "backend/studio/DOCKER.md"
 }

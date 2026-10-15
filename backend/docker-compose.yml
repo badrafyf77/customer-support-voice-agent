@@ -1,105 +1,140 @@
+name: darija-voice
+
+x-environment: &environment
+  DARIJA_STATE_ROOT: /opt/darija
+  DARIJA_MODEL_ROOT: /models
+  HF_HOME: /cache/huggingface
+  TORCH_HOME: /cache/torch
+  VOICE_AGENT: chat
+  VOICE_PROFILE: darija
+  STT_MODEL: /models/asr
+  STT_REALTIME_MODEL: /models/asr
+  STT_USE_MAIN_MODEL_FOR_REALTIME: "true"
+  TURN_DETECTION_DEVICE: cpu
+  TURN_DETECTION_MODEL: /models/turn
+  LLM_PROVIDER: vllm
+  LLM_MODEL: MBZUAI-Paris/Atlas-Chat-2B
+  VLLM_BASE_URL: http://vllm:8001/v1
+  SILMA_TTS_BASE_URL: http://silma:8002
+  VOICE_RUNTIME_MIN_WARM: "1"
+  VOICE_RUNTIME_MAX_CONCURRENT: "1"
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
+x-service: &service
+  platform: linux/amd64
+  env_file: .env
+  environment: *environment
+  init: true
+  stop_grace_period: 45s
+  volumes:
+    - models:/models:ro
+    - model_cache:/cache
+
 services:
-  # Your FastAPI Application Service
-  app:
+  # No GPU needed. Downloads exact revisions and validates the supplied ASR.
+  prepare-models:
+    <<: *service
+    image: darija-voice-backend:local
     build:
       context: .
-      args:
-        STT_MODEL: ${STT_MODEL:-medium.en}
-        STT_REALTIME_MODEL: ${STT_REALTIME_MODEL:-small.en}
-        STT_USE_MAIN_MODEL_FOR_REALTIME: ${STT_USE_MAIN_MODEL_FOR_REALTIME:-true}
-    image: voice-agent-backend:latest
-    container_name: voice-agent-backend
-    ports:
-      - "8080:8000" # Changed to 8080 since vLLM uses 8000
-    environment:
-      # --- LLM Configuration (vLLM) ---
-      - LLM_PROVIDER=vllm
-      - LLM_MODEL=Qwen/Qwen2.5-1.5B-Instruct
-      - VLLM_BASE_URL=http://vllm:8000/v1
-      - VLLM_STARTUP_TIMEOUT_SECONDS=${VLLM_STARTUP_TIMEOUT_SECONDS:-180}
-      - VLLM_HEALTHCHECK_INTERVAL_SECONDS=${VLLM_HEALTHCHECK_INTERVAL_SECONDS:-2}
-
-      # --- Other App Environment Variables ---
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - VOICE_AGENT=${VOICE_AGENT:-chat}
-      - VOICE_PROFILE=${VOICE_PROFILE:-english}
-      - MAX_AUDIO_QUEUE_SIZE=${MAX_AUDIO_QUEUE_SIZE:-50}
-      - VOICE_RUNTIME_MIN_WARM=${VOICE_RUNTIME_MIN_WARM:-1}
-      - VOICE_RUNTIME_MAX_CONCURRENT=${VOICE_RUNTIME_MAX_CONCURRENT:-1}
-      - VOICE_RUNTIME_IDLE_TTL_SECONDS=${VOICE_RUNTIME_IDLE_TTL_SECONDS:-300}
-      - VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS=${VOICE_RUNTIME_ACQUIRE_TIMEOUT_SECONDS:-30}
-      - STT_MODEL=${STT_MODEL:-medium.en}
-      - STT_REALTIME_MODEL=${STT_REALTIME_MODEL:-small.en}
-      - STT_USE_MAIN_MODEL_FOR_REALTIME=${STT_USE_MAIN_MODEL_FOR_REALTIME:-true}
-      - TURN_DETECTION_DEVICE=${TURN_DETECTION_DEVICE:-cpu}
-      - SUPABASE_URL=${SUPABASE_URL:-}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - HF_HOME=/home/appuser/.cache/huggingface
-      - TORCH_HOME=/home/appuser/.cache/torch
+      dockerfile: Dockerfile.darija
+      target: backend
+    command: [prepare]
     volumes:
-      # Mount cache directories
-      - huggingface_cache:/home/appuser/.cache/huggingface
-      - torch_cache:/home/appuser/.cache/torch
+      - models:/models
+      - model_cache:/cache
+      - type: bind
+        source: ${ASR_EXPORT_DIR:-./models/asr-export}
+        target: /asr-export
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: "no"
+
+  vllm:
+    <<: *service
+    image: darija-voice-vllm:local
+    build:
+      context: .
+      dockerfile: Dockerfile.darija
+      target: vllm
+    command: [vllm]
+    environment:
+      <<: *environment
+      VLLM_BIND_HOST: 0.0.0.0
+      DARIJA_VALIDATION_PYTHON: /opt/darija/vllm/bin/python
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.40}
+    depends_on:
+      prepare-models:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /opt/darija/vllm/bin/python, /app/studio/container_health.py, vllm]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+      start_period: 60s
+    deploy: *gpu
+    shm_size: 4gb
+    restart: unless-stopped
+
+  silma:
+    <<: *service
+    image: darija-voice-silma:local
+    build:
+      context: .
+      dockerfile: Dockerfile.darija
+      target: silma
+    command: [silma]
+    environment:
+      <<: *environment
+      SILMA_BIND_HOST: 0.0.0.0
     depends_on:
       vllm:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, compute, utility]
-    restart: unless-stopped
-
-  # vLLM Server Service - Balanced for LLM + STT/VAD/TTS on same GPU
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: voice-agent-vllm
-    ports:
-      - "8000:8000"
-    command:
-      - Qwen/Qwen2.5-1.5B-Instruct
-      - --dtype=auto
-      - --max-model-len=6144
-      - --gpu-memory-utilization=0.8
-      - --max-num-seqs=24
-      - --enable-chunked-prefill
-      - --max-num-batched-tokens=8192
-      - --tensor-parallel-size=1
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - HF_HOME=/root/.cache/huggingface
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 40s
-    volumes:
-      - huggingface_cache:/root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, compute, utility]
+      test: [CMD, /opt/darija/silma/bin/python, /app/studio/container_health.py, silma]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+      start_period: 60s
+    deploy: *gpu
+    shm_size: 2gb
     restart: unless-stopped
-    shm_size: "8gb" # Balanced shared memory
 
-# Define named volumes for persistent data
+  app:
+    <<: *service
+    image: darija-voice-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile.darija
+      target: backend
+    command: [backend]
+    environment:
+      <<: *environment
+      VOICE_BIND_HOST: 0.0.0.0
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      silma:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /opt/darija/backend/bin/python, /app/studio/container_health.py, backend]
+      interval: 10s
+      timeout: 5s
+      retries: 120
+      start_period: 60s
+    deploy: *gpu
+    shm_size: 2gb
+    restart: unless-stopped
+
 volumes:
-  huggingface_cache:
-    driver: local
-  torch_cache:
-    driver: local
+  models:
+  model_cache:

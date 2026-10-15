@@ -2,9 +2,11 @@
 
 Tiny Next/React frontend for starting a voice chat with the backend agent.
 
-For the Lightning Darija backend, follow [the complete runbook](../backend/studio/RUNBOOK.md#5-connect-the-frontend-on-your-local-computer).
-The backend runs on Studio, the frontend runs on localhost, and SSH forwards only
-port 8080. Model weights and GPU dependencies stay on Studio.
+For the Lightning Darija backend, follow [the Docker Compose guide](../backend/studio/DOCKER.md).
+The backend runs in Compose on Studio; expose its port through Lightning and set
+`NEXT_PUBLIC_VOICE_SERVER_URL=https://YOUR-LIGHTNING-BACKEND-URL` in
+`frontend/.env.local`. The frontend runs on localhost. Model weights and GPU
+dependencies stay on Studio. Restart Next after changing `.env.local`.
 
 ```bash
 npm run dev
@@ -21,7 +23,7 @@ The transcript automatically chooses Arabic/Latin direction. The production UI
 keeps the existing microphone and playback worklets and rejects canceled Darija
 output using optional generation IDs. Reconnect starts a fresh transcript.
 See [browser integration and Studio checklist](../backend/studio/BROWSER.md)
-for the SSH tunnel, backend setup, local browser test harness and pending live
+for the local browser test harness and pending live
 voice-quality/interruption checks.
 
 ```bash
