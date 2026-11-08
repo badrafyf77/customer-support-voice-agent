@@ -39,46 +39,43 @@ class SessionContext:
     agent_name: str
     conversation_history: list[dict[str, str]] = field(default_factory=list)
     user_id: str | None = None
-    exam_id: str | None = None
-    attempt_id: str | None = None
     partial_transcript: str = ""
     call_state: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+AgentAction = Literal["ignore", "generate", "finish"]
+
+
 @dataclass(frozen=True)
 class AgentResult:
+    """What the agent wants the voice runtime to do next.
+
+    - ``ignore``: do nothing.
+    - ``generate``: send ``text`` to the LLM and speak the answer.
+    - ``finish``: end the session.
+    """
+
     text: str = ""
-    kind: str = "none"
-    action: str = "ignore"
-    expects_control_block: bool = False
-    question_number: int | None = None
+    action: AgentAction = "ignore"
     history_override: list[dict[str, str]] | None = None
-    should_auto_finish: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        return self.action == "ignore" or (not self.text and not self.should_auto_finish)
+        return self.action == "ignore" or (self.action == "generate" and not self.text)
 
     @classmethod
     def ignore(cls) -> "AgentResult":
         return cls()
 
     @classmethod
-    def from_planned_turn(cls, planned_turn: Any) -> "AgentResult":
-        if planned_turn is None:
-            return cls.ignore()
-        return cls(
-            text=getattr(planned_turn, "control_prompt", "") or "",
-            kind=getattr(planned_turn, "kind", "turn") or "turn",
-            action="generate",
-            expects_control_block=bool(getattr(planned_turn, "expects_control_block", False)),
-            question_number=getattr(planned_turn, "question_number", None),
-            history_override=getattr(planned_turn, "history_override", None),
-            should_auto_finish=bool(getattr(planned_turn, "should_auto_finish", False)),
-            metadata={"planned_turn": planned_turn},
-        )
+    def generate(cls, text: str, history_override: list[dict[str, str]] | None = None) -> "AgentResult":
+        return cls(text=text, action="generate", history_override=history_override)
+
+    @classmethod
+    def finish(cls) -> "AgentResult":
+        return cls(action="finish")
 
 
 def parse_datetime_utc(value: Any) -> datetime | None:

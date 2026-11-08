@@ -32,8 +32,7 @@ code/
 ├── config/global.yaml           # shared defaults
 ├── agents/
 │   ├── base.py                  # BaseAgent.run_turn(...) contract
-│   ├── chat/                    # simple chat agent
-│   └── exam/                    # oral exam agent
+│   └── chat/                    # simple chat agent
 ├── core/
 │   ├── session.py               # WebSocket session lifecycle
 │   ├── pipeline.py              # LLM -> TTS orchestration
@@ -43,9 +42,7 @@ code/
 │       ├── stt/faster_whisper.py
 │       └── tts/realtime.py
 └── services/
-    ├── database.py              # Supabase integration
-    ├── llm.py                   # vLLM/OpenAI-compatible LLM client
-    └── voice_verification.py
+    └── llm.py                   # vLLM/OpenAI-compatible LLM client
 ```
 
 ## Docker Quick Start
@@ -85,8 +82,7 @@ Current selection logic lives in [`code/server.py`](./code/server.py):
 
 | Connection | Agent |
 | --- | --- |
-| `/ws` with no exam query params | `chat` |
-| `/ws?user_id=...&exam_id=...&attempt_id=...` | `exam` |
+| `/ws` | `chat` |
 
 The selected agent is built in `server.py`, then passed into
 `core/session.py::run_session(...)`. The session and pipeline only depend on the
@@ -94,9 +90,8 @@ shared `BaseAgent.run_turn(...)` interface.
 
 To change which agent runs:
 
-1. Edit the branch in `code/server.py::ws_endpoint`.
-2. Import the target agent builder, for example `build_chat_agent` or
-   `build_exam_agent`.
+1. Edit `code/server.py::ws_endpoint`.
+2. Import the target agent builder, for example `build_chat_agent`.
 3. Load the matching config with `load_agent_config("<agent_name>")`.
 4. Pass the built agent and config to `run_session(...)`.
 
@@ -104,7 +99,7 @@ To add a new agent:
 
 1. Create `code/agents/<name>/`.
 2. Add `agent.py`, `config.yaml`, and `README.md`.
-3. Implement a builder that returns `(BaseAgent, initial_state)`.
+3. Implement a builder that returns a `BaseAgent`.
 4. Keep prompts, tools, and agent-only helpers inside that folder.
 5. Register the agent selection branch in `code/server.py`.
 
@@ -113,7 +108,6 @@ To add a new agent:
 | Agent | Folder | Purpose |
 | --- | --- | --- |
 | `chat` | [`code/agents/chat`](./code/agents/chat) | General conversational voice assistant. |
-| `exam` | [`code/agents/exam`](./code/agents/exam) | Oral exam flow backed by exam context. |
 
 ## Configuration
 
@@ -133,8 +127,6 @@ Common variables:
 | `TURN_DETECTION_DEVICE` | Device for turn detection, usually `cpu` or `cuda`. |
 | `VOICE_RUNTIME_MIN_WARM` | Number of warmed voice runtimes to keep ready. |
 | `VOICE_RUNTIME_MAX_CONCURRENT` | Maximum concurrent voice sessions. |
-| `SUPABASE_URL` | Required only by agents that load Supabase context. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Required only by agents that load Supabase context. |
 
 Agent config is layered:
 
@@ -147,19 +139,6 @@ Agent config is layered:
 ### `GET /`
 
 Health/status payload.
-
-### `GET /voice-reference?user_id=...`
-
-Checks whether a user has a stored voice reference.
-
-### `POST /voice-reference`
-
-Uploads a voice enrollment sample.
-
-Form fields:
-
-- `user_id`
-- `audio`
 
 ### `WS /ws`
 
@@ -202,6 +181,5 @@ See [`../frontend/README.md`](../frontend/README.md).
 
 - `core/` owns runtime flow: session, transport, pipeline, STT/TTS nodes.
 - `agents/` owns agent behavior, prompts, tools, and per-agent config.
-- `services/` owns external integrations such as Supabase, LLM API access, and
-  voice verification.
+- `services/` owns external integrations such as LLM API access.
 - Provider-specific STT/TTS logic belongs in `core/nodes/`, not `services/`.

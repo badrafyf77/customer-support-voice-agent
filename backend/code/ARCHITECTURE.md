@@ -12,21 +12,16 @@ Type key:
 
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
-| `server.py` | FastAPI entrypoint for HTTP endpoints and `/ws` sessions. | Uvicorn, Docker command, local `python server.py`. | `agents.chat.agent`, `agents.exam.agent`, `core.config`, `core.logsetup`, `core.session`, `services.database`, FastAPI. | Core | Owns HTTP routing only; session lifecycle belongs in `core/session.py`. |
-| `system_prompt.txt` | Fallback generic system prompt for the speech pipeline. | Read by `core/pipeline.py` when an agent does not provide a prompt. | None. | Optional | Overlaps conceptually with `agents/exam/system_prompt.txt`; agent prompts should win for exam sessions. |
+| `server.py` | FastAPI entrypoint for HTTP endpoints and `/ws` sessions. | Uvicorn, Docker command, local `python server.py`. | `agents.chat.agent`, `core.config`, `core.logsetup`, `core.session`, FastAPI. | Core | Owns HTTP routing only; session lifecycle belongs in `core/session.py`. |
+| `system_prompt.txt` | Fallback generic system prompt for the speech pipeline. | Read by `core/pipeline.py` when an agent does not provide a prompt. | None. | Optional | Agent prompts win when an agent provides one. |
 
 ## Agents
 
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
-| `agents/base.py` | Defines the minimal `BaseAgent.run_turn(...)` contract. | `agents/chat/agent.py`, `agents/exam/agent.py`, `agents/__init__.py`. | `core.models`. | Core | Slight overlap with `core/brain.py` protocols; keep `base.py` as the concrete agent contract. |
-| `agents/chat/agent.py` | Implements the simple non-exam chat agent. | `server.py`. | `agents.base`, `core.models`, stdlib locking/dataclasses. | Core | No overlap; this is the fallback agent when no exam context is provided. |
-| `agents/chat/config.yaml` | Per-agent runtime config for chat sessions. | Loaded by `core.config.load_agent_config("chat")` from `server.py`. | `config/global.yaml` defaults and environment placeholders. | Support | Overrides `config/global.yaml`; keep only chat-specific differences here. |
-| `agents/exam/agent.py` | Orchestrates oral exam planning, graph transitions, control payloads, finish/save behavior. | `server.py`, `agents/exam/__init__.py`; called by `core/session.py` through `BaseAgent.run_turn`. | LangGraph, `agents.base`, `agents.exam.prompts`, `core.brain`, `core.models`, `services.database`. | Core | Large file with some persistence calls; overlaps a little with `services/database.py` and should eventually delegate more save details. |
-| `agents/exam/prompts.py` | Builds personalized exam system prompts and context summaries. | `agents/exam/agent.py`. | stdlib JSON/logging/regex. | Support | No runtime overlap; prompt text should stay here rather than in `agent.py`. |
-| `agents/exam/tools.py` | Reserved boundary for future exam tools. | Not currently called. | None. | Optional | Currently overlaps with nothing; can be removed until real tools exist. |
-| `agents/exam/config.yaml` | Per-agent runtime config for exam sessions. | Loaded by `core.config.load_agent_config("exam")` from `core/session.py` and `server.py`. | `config/global.yaml` defaults and environment placeholders. | Support | Overrides `config/global.yaml`; keep only exam-specific differences here. |
-| `agents/exam/system_prompt.txt` | Static exam prompt asset retained with the exam agent. | Not currently imported by Python code. | None. | Optional | May overlap with `agents/exam/prompts.py`; remove if prompt builder fully replaces it. |
+| `agents/base.py` | Defines the `BaseAgent` contract: `run_turn(...)` plus default `finish_session(...)` / `save_progress(...)` hooks. | `agents/chat/agent.py`, `agents/__init__.py`, `core/session.py`. | `core.models`. | Core | No overlap; this is the only agent contract. |
+| `agents/chat/agent.py` | Implements the simple chat agent. | `server.py`. | `agents.base`, `core.models`. | Core | No overlap; this is the only agent today. |
+| `agents/chat/config.yaml` | Per-agent runtime config for chat sessions. | Loaded by `core.config.load_agent_config("chat")` from `server.py` and `core/session.py`. | `config/global.yaml` defaults and environment placeholders. | Support | Overrides `config/global.yaml`; keep only chat-specific differences here. |
 
 ## Config
 
@@ -38,15 +33,14 @@ Type key:
 
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
-| `core/brain.py` | Shared brain protocols and exam control delimiter. | `core/pipeline.py`, `agents/exam/agent.py`. | `core.models`, asyncio/typing. | Support | Some protocol overlap with `agents/base.py`; `agents/base.py` is the runtime contract, this file supports legacy/streaming shapes. |
 | `core/colors.py` | ANSI color helper for log formatting. | `core/logsetup.py`, `core/session.py`, `core/pipeline.py`, `core/text_context.py`, `core/nodes/stt/faster_whisper.py`. | None. | Optional | Cosmetic only; can be removed if colored logs are replaced with plain logging. |
-| `core/config.py` | Central config/env/YAML loading helpers. | `server.py`, `core/session.py`, `core/nodes/stt/faster_whisper.py`, `core/turndetect.py`, services. | `config/global.yaml`, agent config YAML, `os`, optional `yaml`, optional dotenv. | Core | Should be the only non-service place reading environment variables. |
+| `core/config.py` | Central config/env/YAML loading helpers. | `server.py`, `core/session.py`, `core/nodes/stt/faster_whisper.py`, `core/turndetect.py`. | `config/global.yaml`, agent config YAML, `os`, optional `yaml`, optional dotenv. | Core | Should be the only non-service place reading environment variables. |
 | `core/logsetup.py` | Configures timestamped colored logging. | `server.py`, `core/session.py`. | `core.colors`, stdlib logging/time. | Support | Overlaps cosmetically with `core/colors.py`; both are logging concerns. |
-| `core/models.py` | Shared data models and conversation-history normalization. | `agents/base.py`, agents, `core/brain.py`, `core/session.py`. | stdlib dataclasses/datetime/regex. | Core | Replaces the previous split session models/memory files. |
+| `core/models.py` | Shared data models (`SessionContext`, `AgentResult`) and conversation-history normalization. | `agents/base.py`, agents, `core/session.py`. | stdlib dataclasses/datetime/regex. | Core | Replaces the previous split session models/memory files. |
 | `core/nodes/stt/faster_whisper.py` | STT node using RealtimeSTT/faster-whisper plus VAD and turn callbacks. | `core/transport/websocket.py`, `core/session.py` for config mutation. | `core.config`, `core.turndetect`, `core.text_similarity`, `core.colors`, RealtimeSTT, numpy. | Core | Single source of truth for STT/VAD behavior; should not be duplicated in `services/`. |
 | `core/nodes/tts/realtime.py` | TTS node using RealtimeTTS with Kokoro/Coqui/Orpheus engines. | `core/pipeline.py`. | RealtimeTTS, Hugging Face Hub, numpy, stdlib threading/queues. | Core | Single source of truth for TTS behavior; should not be duplicated in `services/`. |
-| `core/pipeline.py` | Orchestrates LLM text generation, control-block stripping, and TTS worker threads. | `core/voice_runtime_pool.py`, `core/session.py`. | `core.nodes.tts.realtime`, `services.llm`, `core.text_context`, `core.text_similarity`, `core.brain`. | Core | Still contains a lot of worker detail; provider-specific TTS logic is delegated to the TTS node. |
-| `core/session.py` | Owns app lifespan, WebSocket session tasks, transcript history, interrupts, and finish flow. | `server.py`. | FastAPI WebSocket, `core.config`, `core.models`, `core.pipeline`, `core.upsample_overlap`, `core.voice_runtime_pool`, `services.voice_verification`, `services.database`. | Core | Large file; overlaps a little with agent finish/save responsibilities. |
+| `core/pipeline.py` | Orchestrates LLM text generation and TTS worker threads. | `core/voice_runtime_pool.py`, `core/session.py`. | `core.nodes.tts.realtime`, `services.llm`, `core.text_context`, `core.text_similarity`. | Core | Still contains a lot of worker detail; provider-specific TTS logic is delegated to the TTS node. |
+| `core/session.py` | Owns app lifespan, WebSocket session tasks, transcript history, interrupts, and finish flow. | `server.py`. | FastAPI WebSocket, `core.config`, `core.models`, `core.upsample_overlap`, `core.voice_runtime_pool`. | Core | Large file; delegates finish/save details to the agent hooks. |
 | `core/text_context.py` | Finds safe text chunks for quick TTS handoff. | `core/pipeline.py`. | `core.colors`, stdlib logging/typing. | Support | Related to `core/text_similarity.py`, but handles chunk boundaries rather than similarity. |
 | `core/text_similarity.py` | Normalizes text and computes similarity for abort/de-dupe logic. | `core/pipeline.py`, `core/nodes/stt/faster_whisper.py`. | stdlib regex/difflib/logging. | Support | Related to STT normalization, but reusable enough to stay separate. |
 | `core/transport/websocket.py` | Converts incoming PCM chunks to 16 kHz audio and feeds the STT node. | `core/voice_runtime_pool.py`, `core/transport/__init__.py`. | `core.nodes.stt.faster_whisper`, scipy, numpy, asyncio. | Core | Transport-specific; should not contain agent or TTS business logic. |
@@ -58,23 +52,19 @@ Type key:
 
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
-| `services/database.py` | Supabase access for profiles, exams, attempts, transcripts, and voice references. | `server.py`, `agents/exam/agent.py`, `core/session.py`. | `core.config`, Supabase client. | Core | Persistence details overlap slightly with exam finish logic in `agents/exam/agent.py`. |
 | `services/llm.py` | Provider wrapper for vLLM/OpenAI-compatible streaming generation. | `core/pipeline.py`. | OpenAI client, env vars, stdlib threading/time/uuid. | Core | No overlap; LLM API access stays here while orchestration stays in `core/pipeline.py`. |
-| `services/speaker_verification.py` | Extracts and compares speaker embeddings. | `server.py`, `services/voice_verification.py`. | SpeechBrain/torch stack, numpy, `core.config`. | Optional | Supports voice verification only; separate from STT. |
-| `services/voice_verification.py` | Samples student answer audio and records speaker-verification checks. | `core/session.py`. | `services.speaker_verification`, `core.config`, numpy/threading. | Optional | Works with `services/database.py` for persistence, but owns verification decisions. |
 
 ## Main Runtime Flow
 
 1. The client connects to `server.py` at `/ws`.
-2. `server.py` loads exam context through `services/database.py` when `user_id`, `exam_id`, or `attempt_id` are present.
-3. `server.py` builds either `ExamAgentBrain` or `ChatAgentBrain`, loads agent config with `core/config.py`, then calls `core/session.py::run_session`.
-4. `core/session.py` acquires a warmed `VoiceRuntime` from `core/voice_runtime_pool.py`.
-5. `VoiceRuntime` contains:
+2. `server.py` builds the `ChatAgent`, loads its config with `core/config.py`, then calls `core/session.py::run_session`.
+3. `core/session.py` acquires a warmed `VoiceRuntime` from `core/voice_runtime_pool.py`.
+4. `VoiceRuntime` contains:
    - `core/transport/websocket.py::AudioInputProcessor`
    - `core/pipeline.py::SpeechPipelineManager`
-6. Incoming audio bytes go to `AudioInputProcessor`, which resamples them and feeds `core/nodes/stt/faster_whisper.py`.
-7. The STT node emits partial, potential-final, and final transcript callbacks into `core/session.py`.
-8. On a final user turn, `core/session.py` appends the user message, asks the active agent via `BaseAgent.run_turn(...)`, and receives an `AgentResult`.
-9. `core/pipeline.py` sends the agent prompt/history to `services/llm.py`, strips any exam control block, and streams spoken text to `core/nodes/tts/realtime.py`.
-10. The TTS node produces audio chunks; `core/session.py` base64-encodes them with `core/upsample_overlap.py` and sends `tts_chunk` messages back over the WebSocket.
-11. When the assistant turn finishes, `core/session.py` sends final text events, updates conversation history, and lets the agent apply any control transition.
+5. Incoming audio bytes go to `AudioInputProcessor`, which resamples them and feeds `core/nodes/stt/faster_whisper.py`.
+6. The STT node emits partial, potential-final, and final transcript callbacks into `core/session.py`.
+7. On a final user turn, `core/session.py` appends the user message and calls `BaseAgent.run_turn(text, session)`, which returns an `AgentResult`.
+8. For a `generate` result, `core/pipeline.py` sends the prompt and history to `services/llm.py` and streams the spoken text to `core/nodes/tts/realtime.py`. A `finish` result ends the session through the agent's `finish_session(...)` hook.
+9. The TTS node produces audio chunks; `core/session.py` base64-encodes them with `core/upsample_overlap.py` and sends `tts_chunk` messages back over the WebSocket.
+10. When the assistant turn finishes, `core/session.py` sends the final text event and updates conversation history.

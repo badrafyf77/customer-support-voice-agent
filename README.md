@@ -4,11 +4,13 @@ Realtime browser-to-backend voice-agent project with:
 
 - a **FastAPI voice backend** in `backend`
 - a **Next.js voice chat frontend** in `frontend`
-- support for simple voice chat and Supabase-backed oral exam sessions
 
-The backend includes an oral-exam agent and a simple chat agent. The architecture
-is intentionally modular so another agent, such as customer support, can be added
-under `backend/code/agents/`.
+The backend currently runs a simple chat agent. The architecture is intentionally
+modular so another agent, such as customer support, can be added under
+`backend/code/agents/`.
+
+The plan for turning it into a customer support agent is in
+[`docs/goals/`](docs/goals/README.md).
 
 ## Project Structure
 
@@ -16,9 +18,9 @@ under `backend/code/agents/`.
 .
 ├── backend/
 │   ├── code/
-│   │   ├── agents/              # chat/exam agents
+│   │   ├── agents/              # voice agents (chat)
 │   │   ├── core/                # session, transport, STT/TTS nodes, pipeline
-│   │   ├── services/            # database, LLM API, voice verification
+│   │   ├── services/            # LLM API client
 │   │   └── server.py            # FastAPI entrypoint
 │   ├── docker-compose.yml       # backend + vLLM stack
 │   ├── Dockerfile
@@ -97,31 +99,11 @@ NEXT_PUBLIC_VOICE_SERVER_URL=http://localhost:8080
 
 ### Chat Mode
 
-Connect to `/ws` without query params.
+Connect to `/ws`.
 
 This uses:
 
 - `backend/code/agents/chat/agent.py`
-
-### Exam Mode
-
-Connect to `/ws` with one or more exam identifiers:
-
-```text
-/ws?user_id=...&exam_id=...&attempt_id=...
-```
-
-This uses:
-
-- `backend/code/agents/exam/agent.py`
-- Supabase context from `services/database.py`
-
-Exam mode requires:
-
-```bash
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
-```
 
 ## Configuration
 
@@ -170,7 +152,7 @@ npm run build
 
 - `core/` owns runtime flow: session, transport, pipeline, STT/TTS nodes.
 - `agents/` owns agent behavior and prompts.
-- `services/` owns external integrations: Supabase, LLM API, voice verification.
+- `services/` owns external integrations, such as the LLM API client.
 - `frontend/` owns browser capture/playback and transcript rendering.
 
 Keep provider-specific STT/TTS logic in `core/nodes/`; do not duplicate it under

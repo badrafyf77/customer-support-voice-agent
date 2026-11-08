@@ -130,8 +130,6 @@ if VOICE_RUNTIME_MAX_CONCURRENT < VOICE_RUNTIME_MIN_WARM:
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from core.pipeline import _strip_control_leak
-
 LANGUAGE = "en"
 # TTS_FINAL_TIMEOUT = 0.5 # unsure if 1.0 is needed for stability
 TTS_FINAL_TIMEOUT = 1.0 # unsure if 1.0 is needed for stability
@@ -220,7 +218,7 @@ async def lifespan(app):
     """
     logger.info("🖥️▶️ Server starting up")
     
-    agent_name = getattr(app.state, "AGENT_NAME", get_env("VOICE_AGENT", "exam") or "exam")
+    agent_name = getattr(app.state, "AGENT_NAME", get_env("VOICE_AGENT", "chat") or "chat")
     agent_config = load_agent_config(agent_name)
     app.state.AGENT_CONFIG = agent_config
 
@@ -349,10 +347,8 @@ def format_timestamp_ns(timestamp_ns: int) -> str:
 def _build_session_context(conn_state, reason: str) -> SessionContext:
     return SessionContext(
         session_id=str(id(conn_state)),
-        agent_name=getattr(conn_state, "agent_name", "exam"),
+        agent_name=getattr(conn_state, "agent_name", "chat"),
         user_id=getattr(conn_state, "user_id", None),
-        exam_id=getattr(conn_state, "exam_id", None),
-        attempt_id=getattr(conn_state, "attempt_id", None),
         conversation_history=list(getattr(conn_state, "conversation_history", []) or []),
         call_state={
             "session_finished": getattr(conn_state, "session_finished", False),
@@ -363,28 +359,17 @@ def _build_session_context(conn_state, reason: str) -> SessionContext:
     )
 
 
-async def _run_agent_turn(brain: Any, conn_state: Any, reason: str) -> AgentResult:
-    if hasattr(brain, "run_turn"):
-        return await brain.run_turn("", _build_session_context(conn_state, reason))
-
-    planned_turn = None
-    if getattr(brain, "has_pending_student_turn", False):
-        planned_turn = brain.plan_student_turn_response(conn_state.conversation_history)
-    if not planned_turn:
-        planned_turn = brain.plan_next_turn(conn_state.conversation_history)
-    if not planned_turn and reason == "session_ready":
-        planned_turn = brain.plan_resume_turn(conn_state.conversation_history)
-    return AgentResult.from_planned_turn(planned_turn)
-
-
-async def trigger_orchestrated_exam_turn(
+async def trigger_agent_turn(
     conn_state,
     callbacks: 'TranscriptionCallbacks',
     message_queue: asyncio.Queue,
+    text: str,
     reason: str,
 ) -> bool:
     """
-    Ask the active agent brain for the next assistant turn and start generation.
+    Ask the active agent for the next assistant turn and start generation.
+
+    `text` is the finished user turn, or "" for an agent-initiated turn.
     """
     brain = getattr(conn_state, "brain", None)
     if not brain:
@@ -394,55 +379,37 @@ async def trigger_orchestrated_exam_turn(
         return False
 
     if conn_state.pipeline_manager.is_valid_gen():
-        logger.info("🧭 Skipping orchestrated turn trigger because generation is already active (%s).", reason)
+        logger.info("🧭 Skipping agent turn because generation is already active (%s).", reason)
         return False
 
     try:
-        agent_result = await _run_agent_turn(brain, conn_state, reason)
+        agent_result: AgentResult = await brain.run_turn(text, _build_session_context(conn_state, reason))
     except Exception as exc:
         logger.exception("🧭 Failed to build the agent turn: %s", exc)
         return False
 
-    if agent_result.is_empty:
-        logger.info("🧭 No orchestrated exam turn to trigger (%s).", reason)
-        return False
-
-    logger.info(
-        "🧭 Triggering orchestrated exam turn (%s): kind=%s question=%s",
-        reason,
-        agent_result.kind,
-        agent_result.question_number,
-    )
-
-    if agent_result.should_auto_finish or agent_result.action == "finish":
-        logger.info("🧭 Agent decided the session is complete. Finishing silently without another spoken turn.")
-        await trigger_exam_finish(
-            conn_state,
-            callbacks,
-            conn_state.user_id,
-            conn_state.exam_id,
-            conn_state.attempt_id,
-            message_queue,
-            reason="agent_decided_session_complete",
-        )
+    if agent_result.action == "finish":
+        logger.info("🧭 Agent decided the session is complete (%s).", reason)
+        await trigger_session_finish(conn_state, callbacks, message_queue, reason="agent_decided_session_complete")
         return True
 
-    callbacks.prepare_assistant_turn(keep_microphone_blocked=agent_result.should_auto_finish)
+    if agent_result.is_empty:
+        logger.info("🧭 No agent turn to trigger (%s).", reason)
+        return False
+
+    logger.info("🧭 Triggering agent turn (%s).", reason)
+    callbacks.prepare_assistant_turn()
     conn_state.pipeline_manager.history = conn_state.conversation_history
     conn_state.pipeline_manager.prepare_generation(
         agent_result.text,
-        expects_control_block=agent_result.expects_control_block,
         history_override=agent_result.history_override,
     )
     return True
 
 
-async def trigger_exam_finish(
+async def trigger_session_finish(
     conn_state,
     callbacks: 'TranscriptionCallbacks',
-    user_id: str,
-    exam_id: str,
-    attempt_id: str,
     message_queue: asyncio.Queue,
     reason: str,
 ) -> None:
@@ -482,9 +449,6 @@ async def process_incoming_data(
     incoming_chunks: asyncio.Queue,
     callbacks: 'TranscriptionCallbacks',
     message_queue: asyncio.Queue,
-    user_id: str = None,
-    exam_id: str = None,
-    attempt_id: str = None,
 ) -> None:
     """
     Receives messages via WebSocket, processes audio and text messages.
@@ -501,9 +465,6 @@ async def process_incoming_data(
         incoming_chunks: An asyncio queue to put processed audio metadata dictionaries into.
         callbacks: The TranscriptionCallbacks instance for this connection to manage state.
         message_queue: Queue for sending messages to the client.
-        user_id: Optional user UUID from WebSocket connection.
-        exam_id: Optional exam UUID from WebSocket connection.
-        attempt_id: Optional exam attempt UUID from WebSocket connection.
     """
     try:
         while True:
@@ -576,11 +537,11 @@ async def process_incoming_data(
                     if turn_detection:
                         turn_detection.update_settings(speed_factor)
                         logger.info(f"🖥️⚙️ Updated turn detection settings to factor: {speed_factor:.2f}")
-                elif msg_type == "finish_exam":
-                    logger.info("🖥️🏁 Received finish_exam from client (oral exam).")
-                    
+                elif msg_type == "end_session":
+                    logger.info("🖥️🏁 Received end_session from client.")
+
                     # STEP 1: IMMEDIATELY send stop signals to frontend to clear TTS buffer
-                    logger.info("🖥️🛑 Sending TTS stop signals to client (finish oral exam)")
+                    logger.info("🖥️🛑 Sending TTS stop signals to client (end session)")
                     message_queue.put_nowait({
                         "type": "tts_interruption",
                         "content": ""
@@ -595,25 +556,21 @@ async def process_incoming_data(
                     callbacks.user_interrupted = True
                     
                     # STEP 3: Abort any ongoing generation (LLM + TTS)
-                    logger.info("🖥️🛑 Aborting all ongoing generation (finish oral exam)")
+                    logger.info("🖥️🛑 Aborting all ongoing generation (end session)")
                     conn_state.audio_processor.abort_generation()
                     if conn_state.pipeline_manager.running_generation:
-                        conn_state.pipeline_manager.abort_generation(reason="Oral exam finished by user")
-                    
+                        conn_state.pipeline_manager.abort_generation(reason="Session ended by user")
+
                     # STEP 4: Wait a moment for everything to stop cleanly
                     await asyncio.sleep(0.2)
-                    
-                    # STEP 5: Finalize the oral exam attempt (no scoring in this backend)
-                    logger.info("🖥️🧾 Finalizing oral exam attempt...")
+
+                    # STEP 5: Let the agent finish the session
                     asyncio.create_task(
-                        trigger_exam_finish(
+                        trigger_session_finish(
                             conn_state,
                             callbacks,
-                            user_id,
-                            exam_id,
-                            attempt_id,
                             message_queue,
-                            reason="manual_finish_requested_by_student",
+                            reason="end_requested_by_user",
                         )
                     )
 
@@ -822,37 +779,11 @@ async def send_tts_chunks(conn_state, message_queue: asyncio.Queue, callbacks: '
                         else:
                             logger.info(f"🖥️✅ Callback assistant_answer already has complete text: '{callbacks.assistant_answer[:100]}...'")
                     
-                    delivered_turn = callbacks.send_final_assistant_answer() # Callbacks method
+                    callbacks.send_final_assistant_answer() # Callbacks method
                     conn_state.pipeline_manager.running_generation = None
 
                     callbacks.tts_chunk_sent = False # Reset via callbacks
                     callbacks.reset_state() # Reset connection state via callbacks
-
-                    if delivered_turn and delivered_turn.should_auto_finish:
-                        asyncio.create_task(
-                            trigger_exam_finish(
-                                conn_state,
-                                callbacks,
-                                conn_state.user_id,
-                                conn_state.exam_id,
-                                conn_state.attempt_id,
-                                message_queue,
-                                reason="question_limit_reached",
-                            )
-                        )
-                    elif delivered_turn:
-                        logger.info(
-                            "🧭 Scheduling spoken recovery turn after silent controller transition: kind=%s question=%s",
-                            delivered_turn.kind,
-                            delivered_turn.question_number,
-                        )
-                        callbacks.prepare_assistant_turn(keep_microphone_blocked=delivered_turn.should_auto_finish)
-                        conn_state.pipeline_manager.history = conn_state.conversation_history
-                        conn_state.pipeline_manager.prepare_generation(
-                            delivered_turn.control_prompt,
-                            expects_control_block=delivered_turn.expects_control_block,
-                            history_override=delivered_turn.history_override,
-                        )
 
                 log_status()
                 await asyncio.sleep(0.001)  # Only sleep when waiting
@@ -996,7 +927,7 @@ class TranscriptionCallbacks:
         # Keep the abort call related to the audio processor/pipeline manager
         self.conn_state.audio_processor.abort_generation()
 
-    def prepare_assistant_turn(self, keep_microphone_blocked: bool = False):
+    def prepare_assistant_turn(self):
         """
         Prepares the connection state for an assistant-led turn.
         """
@@ -1004,7 +935,7 @@ class TranscriptionCallbacks:
         self.user_interrupted = False
         self.tts_chunk_sent = False
         self.tts_to_client = True
-        self.conn_state.lock_microphone_until_finish = keep_microphone_blocked
+        self.conn_state.lock_microphone_until_finish = False
         self._last_stream_time = 0.0
         self._last_stream_length = 0
         self._last_logged_length = 0
@@ -1203,34 +1134,15 @@ class TranscriptionCallbacks:
         # Also update the shared pipeline manager's history for this request
         self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
 
-        # Voice verification: passively sample answer audio. The manager decides
-        # whether to actually extract an embedding (always for the first answer,
-        # then randomly for subsequent ones) so the student cannot predict which
-        # turns will be checked. Runs in a background thread.
-        verification_manager = getattr(self.conn_state, "voice_verification", None)
-        if verification_manager is not None:
-            try:
-                transcriber = self.conn_state.audio_processor.transcriber
-                answer_audio = transcriber.get_last_audio_copy() if transcriber else None
-                if answer_audio is not None and getattr(answer_audio, "size", 0) > 0:
-                    verification_manager.submit_answer_audio(
-                        answer_audio,
-                        transcript=user_request_content,
-                    )
-                else:
-                    logger.debug("🗣️🔐 No buffered audio available for voice verification this turn")
-            except Exception as exc:
-                logger.warning("🗣️🔐 Failed to schedule voice verification for this turn: %s", exc)
-
         brain = getattr(self.conn_state, "brain", None)
         if brain:
-            brain.queue_student_turn(user_request_content)
             asyncio.run_coroutine_threadsafe(
-                trigger_orchestrated_exam_turn(
+                trigger_agent_turn(
                     self.conn_state,
                     self,
                     self.message_queue,
-                    reason="student_turn_completed",
+                    text=user_request_content,
+                    reason="user_turn_completed",
                 ),
                 self.loop,
             )
@@ -1290,7 +1202,6 @@ class TranscriptionCallbacks:
         Args:
             txt: The partial assistant text (accumulates as LLM generates).
         """
-        txt = _strip_control_leak(txt)
         # Always update assistant_answer with the latest text
         self.assistant_answer = txt
         
@@ -1377,11 +1288,9 @@ class TranscriptionCallbacks:
                     final answer is available. Defaults to False.
         """
         final_answer = ""
-        control_payload = None
-        
+
         # FIRST: Try to get the most complete text from pipeline manager
         if self.conn_state.pipeline_manager.running_generation:
-            control_payload = self.conn_state.pipeline_manager.running_generation.control_payload
             pipeline_answer = self.conn_state.pipeline_manager.running_generation.quick_answer + self.conn_state.pipeline_manager.running_generation.final_answer
             # Use whichever is longer (more complete)
             if len(pipeline_answer) > len(self.assistant_answer):
@@ -1396,39 +1305,20 @@ class TranscriptionCallbacks:
             logger.debug(f"🖥️✅ Using assistant_answer (no pipeline): '{final_answer[:100]}...'")
 
         if not final_answer: # Check if constructed answer is empty
-            brain = getattr(self.conn_state, "brain", None)
-            if brain and control_payload and not forced:
-                logger.info("🖥️🧭 Final assistant answer is empty, but an exam control payload is available. Applying silent transition.")
-                return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
-
             logger.warning(f"🖥️⚠️ Final assistant answer was empty, not sending.")
-            return None # Nothing to send
+            return
 
         logger.info(f"🖥️✅ Attempting to send final answer (length: {len(final_answer)}): '{final_answer[:150]}...' (Sent previously: {self.final_assistant_answer_sent})")
 
         if not self.final_assistant_answer_sent and final_answer:
-            # Strip leaked control blocks, but keep the display text formatting
-            # exactly as streamed. TTS cleanup happens before synthesis; UI text
-            # must not collapse newlines or other intentional whitespace.
-            display_answer = _strip_control_leak(final_answer)
+            # Keep the display text formatting exactly as streamed. TTS cleanup
+            # happens before synthesis; UI text must not collapse newlines or
+            # other intentional whitespace.
+            display_answer = final_answer.rstrip()
             display_answer = display_answer.replace("\r\n", "\n").replace("\r", "\n")
             log_preview = " ".join(display_answer.split())
 
-            brain = getattr(self.conn_state, "brain", None)
-            silenced_completed_exam_turn = False
-            if (
-                display_answer.strip()
-                and brain
-                and control_payload
-                and brain.should_silence_completed_turn(control_payload, forced=forced)
-            ):
-                logger.info(
-                    "🖥️🧭 Suppressing spoken assistant text because consuming this question completes the oral exam."
-                )
-                display_answer = ""
-                silenced_completed_exam_turn = True
-
-            if display_answer.strip(): # Ensure it's not empty after control stripping
+            if display_answer.strip(): # Ensure it's not empty after cleaning
                 # Check if response took too long (potential issue)
                 if hasattr(self, 'last_user_speech_time') and self.last_user_speech_time > 0:
                     response_time = time.time() - self.last_user_speech_time
@@ -1447,61 +1337,10 @@ class TranscriptionCallbacks:
                 self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
                 self.final_assistant_answer_sent = True
                 self.final_assistant_answer = display_answer # Store the sent answer
-
-                if brain:
-                    return brain.mark_assistant_turn_delivered(display_answer, control_payload, forced=forced)
             else:
-                if silenced_completed_exam_turn:
-                    logger.info("🖥️🧭 Silent oral-exam finish applied; no spoken assistant text sent.")
-                else:
-                    logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
+                logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
                 self.final_assistant_answer_sent = False # Don't mark as sent
                 self.final_assistant_answer = "" # Clear the stored answer
-                if brain and control_payload and not forced:
-                    return brain.mark_assistant_turn_delivered("", control_payload, forced=forced)
-        elif forced and not final_answer: # Should not happen due to earlier check, but safety
-             logger.warning(f"🖥️⚠️ {Colors.YELLOW}Forced send of final assistant answer, but it was empty.{Colors.RESET}")
-             self.final_assistant_answer = "" # Clear the stored answer
-
-        return None
-
-
-async def _build_voice_verification_manager(user_id: str | None, attempt_id: str | None, display_id: str):
-    """Load the optional per-session voice verification helper."""
-    if not user_id and not attempt_id:
-        return None
-
-    voice_verification_manager = None
-    try:
-        from services.database import get_database_client
-        from services.voice_verification import VoiceVerificationManager
-
-        voice_verification_manager = VoiceVerificationManager(attempt_id)
-        if user_id:
-            voice_ref = get_database_client().get_user_voice_reference(user_id)
-            if voice_ref:
-                stored_threshold = voice_ref.get("threshold")
-                if isinstance(stored_threshold, (int, float)):
-                    voice_verification_manager.threshold = float(stored_threshold)
-                voice_verification_manager.set_reference_from_embedding(
-                    voice_ref["embedding"],
-                    meta={
-                        "enrolled_at": voice_ref.get("enrolled_at"),
-                        "model": voice_ref.get("model"),
-                    },
-                )
-                log_event("🗣️", f"[User {display_id}] Permanent voice reference loaded for verification")
-            else:
-                log_event(
-                    "🗣️",
-                    f"[User {display_id}] No voice enrollment found — verification disabled for this attempt",
-                    level="warning",
-                )
-    except Exception as exc:
-        logger.warning("🗣️🔐 Could not initialize voice verification manager: %s", exc)
-        voice_verification_manager = None
-
-    return voice_verification_manager
 
 
 # --------------------------------------------------------------------
@@ -1513,8 +1352,6 @@ async def run_session(
     config: dict,
     app_state,
     user_id: str = None,
-    exam_id: str = None,
-    attempt_id: str = None,
 ):
     """Run one voice-agent WebSocket session using the supplied agent brain."""
     await ws.accept()
@@ -1522,7 +1359,7 @@ async def run_session(
     display_id = user_id[-4:] if user_id else str(connection_id)[-4:]
     log_event(
         "🔌",
-        f"[User {display_id}] Connected (agent={config.get('agent_name', 'exam')}, user_id={user_id}, exam_id={exam_id}, attempt_id={attempt_id})"
+        f"[User {display_id}] Connected (agent={config.get('agent_name', 'chat')}, user_id={user_id})"
     )
 
     message_queue = asyncio.Queue()
@@ -1535,7 +1372,7 @@ async def run_session(
     await ws.send_json({
         "type": "status",
         "status": "initializing",
-        "message": "Setting up your oral exam session..."
+        "message": "Setting up your voice session..."
     })
 
     runtime_manager = app_state.RUNTIME_MANAGER
@@ -1554,7 +1391,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "busy",
-            "message": "The oral exam backend is at capacity right now. Please retry in a moment."
+            "message": "The voice backend is at capacity right now. Please retry in a moment."
         })
         await ws.close(code=1013)
         return
@@ -1563,7 +1400,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "busy",
-            "message": "The oral exam backend is at capacity right now. Please retry in a moment."
+            "message": "The voice backend is at capacity right now. Please retry in a moment."
         })
         await ws.close(code=1013)
         return
@@ -1572,14 +1409,12 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "error",
-            "message": "The oral exam backend could not prepare its speech runtime. Please retry in a moment."
+            "message": "The voice backend could not prepare its speech runtime. Please retry in a moment."
         })
         await ws.close(code=1011)
         return
 
     log_event("✅", f"[User {display_id}] Speech runtime acquired")
-
-    voice_verification_manager = await _build_voice_verification_manager(user_id, attempt_id, display_id)
 
     # Create connection state holder
     class ConnectionState:
@@ -1593,11 +1428,8 @@ async def run_session(
             self.finish_in_progress = False
             self.lock_microphone_until_finish = False
             self.brain = brain
-            self.agent_name = config.get("agent_name", "exam")
+            self.agent_name = config.get("agent_name", "chat")
             self.user_id = user_id
-            self.exam_id = exam_id
-            self.attempt_id = attempt_id
-            self.voice_verification = voice_verification_manager
 
     conn_state = ConnectionState(runtime)
 
@@ -1617,7 +1449,7 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "error",
-            "message": "The oral exam backend could not prepare its speech runtime. Please retry in a moment."
+            "message": "The voice backend could not prepare its speech runtime. Please retry in a moment."
         })
         await ws.close(code=1011)
         return
@@ -1634,9 +1466,6 @@ async def run_session(
                     audio_chunks,
                     callbacks,
                     message_queue,
-                    user_id,
-                    exam_id,
-                    attempt_id,
                 )
             ),
             asyncio.create_task(conn_state.audio_processor.process_chunk_queue(audio_chunks)),
@@ -1648,14 +1477,15 @@ async def run_session(
         await ws.send_json({
             "type": "status",
             "status": "ready",
-            "message": "Oral exam session ready. The exam agent is starting the exam."
+            "message": "Voice session ready."
         })
-        log_event("🚀", f"[User {display_id}] Exam session ready")
+        log_event("🚀", f"[User {display_id}] Session ready")
 
-        await trigger_orchestrated_exam_turn(
+        await trigger_agent_turn(
             conn_state,
             callbacks,
             message_queue,
+            text="",
             reason="session_ready",
         )
 
@@ -1670,7 +1500,7 @@ async def run_session(
     finally:
         log_event("👋", f"[User {display_id}] Disconnected")
         
-        # Save conversation transcript if the oral exam has not already been finished and saved.
+        # Save conversation transcript if the session has not already been finished and saved.
         if conn_state and len(conn_state.conversation_history) > 0 and not conn_state.session_finished:
             log_event("💾", f"[User {display_id}] Saving session transcript ({len(conn_state.conversation_history)} messages)")
             try:

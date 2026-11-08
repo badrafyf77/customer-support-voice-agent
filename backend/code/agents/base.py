@@ -13,15 +13,20 @@ class BaseAgent(ABC):
     system_prompt: str | None = None
     conversation_history: list[dict[str, str]] = []
 
-    @property
-    def initial_state(self) -> dict[str, Any]:
-        return {}
-
-    def build_graph(self) -> Any | None:
-        """Optional hook for graph-backed agents."""
-        return None
-
     @abstractmethod
     async def run_turn(self, text: str, session: SessionContext) -> AgentResult:
-        """Return the next agent result for a completed user turn or runtime event."""
+        """Return the next agent result.
+
+        ``text`` is the finished user turn, or an empty string when the runtime
+        asks for an agent-initiated turn (for example when the session starts).
+        """
         ...
+
+    async def finish_session(self, conn_state: Any, message_queue: Any, reason: str) -> None:
+        """End the session and tell the client it is finished."""
+        conn_state.session_finished = True
+        await message_queue.put({"type": "finish_complete", "success": True})
+
+    async def save_progress(self, conn_state: Any) -> None:
+        """Persist the session when the client disconnects. No-op by default."""
+        return None

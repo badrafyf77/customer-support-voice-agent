@@ -4,45 +4,13 @@ import threading
 import logging
 import time
 from queue import Queue, Empty
-import json
-import re
 
 # (Make sure real/mock imports are correct)
-from core.brain import EXAM_CONTROL_DELIMITER
 from core.colors import Colors
 from core.nodes.tts.realtime import RealtimeTTSProvider
 from core.text_context import TextContext
 from core.text_similarity import TextSimilarity
 from services.llm import LLM
-
-# Matches the intended §CTRL§ delimiter and everything after it
-_CTRL_DELIMITER_RE = re.compile(re.escape(EXAM_CONTROL_DELIMITER) + r'.*$', re.DOTALL)
-
-# Matches tool-call style control blocks the model sometimes outputs instead of §CTRL§.
-# Covers several common formats:
-#   ask_next_question { "question": "..." }
-#   ask_next_question\n{ "question": "..." }
-#   {"name": "ask_next_question", "arguments": {...}}
-#   {"transition": "ask_next_question", ...}
-_CONTROL_LEAK_RE = re.compile(
-    r'(?:'
-    r'\b(?:ask_next_question|repeat_current_question|finish_exam)\s*[\(\{]'   # func-call prefix
-    r'|'
-    r'\{[^{}]*"(?:name|transition)"\s*:\s*"(?:ask_next_question|repeat_current_question|finish_exam)"'  # JSON with name/transition key
-    r')',
-    re.DOTALL,
-)
-
-
-def _strip_control_leak(text: str) -> str:
-    """Remove any leaked control block from spoken text (§CTRL§ or tool-call variants)."""
-    # Strip §CTRL§ and everything after (intended format, safety net)
-    text = _CTRL_DELIMITER_RE.sub('', text)
-    # Strip tool-call style leaks
-    match = _CONTROL_LEAK_RE.search(text)
-    if match:
-        text = text[:match.start()]
-    return text.rstrip()
 
 # (Logging setup)
 logger = logging.getLogger(__name__)
@@ -139,12 +107,6 @@ class RunningGeneration:
         self.audio_final_finished: bool = False
         self.final_answer: str = ""
 
-        self.expects_control_block: bool = False
-        self.control_tail_buffer: str = ""
-        self.control_block_detected: bool = False
-        self.control_payload_raw: str = ""
-        self.control_payload: Optional[dict] = None
-        self.control_parse_error: str = ""
         self.spoken_text_detected: bool = False
 
         self.completed: bool = False
@@ -416,97 +378,10 @@ class SpeechPipelineManager:
         """
         return chunk.replace("—", "-").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("…", "...")
 
-    def _delimiter_overlap_length(self, text: str) -> int:
-        max_overlap = min(len(text), len(EXAM_CONTROL_DELIMITER) - 1)
-        for size in range(max_overlap, 0, -1):
-            if text.endswith(EXAM_CONTROL_DELIMITER[:size]):
-                return size
-        return 0
-
     def _extract_spoken_text_from_chunk(self, current_gen: RunningGeneration, chunk: str) -> str:
         if not chunk:
             return ""
-
-        if not current_gen.expects_control_block:
-            return self.preprocess_chunk(chunk)
-
-        if current_gen.control_block_detected:
-            current_gen.control_payload_raw += chunk
-            return ""
-
-        combined = current_gen.control_tail_buffer + chunk
-        delimiter_index = combined.find(EXAM_CONTROL_DELIMITER)
-        if delimiter_index >= 0:
-            spoken_text = combined[:delimiter_index]
-            current_gen.control_block_detected = True
-            current_gen.control_payload_raw += combined[delimiter_index + len(EXAM_CONTROL_DELIMITER):]
-            current_gen.control_tail_buffer = ""
-            return self.preprocess_chunk(spoken_text) if spoken_text else ""
-
-        # Also catch tool-call style leaks: "ask_next_question { ... }" without §CTRL§
-        tool_call_match = _CONTROL_LEAK_RE.search(combined)
-        if tool_call_match:
-            spoken_text = combined[:tool_call_match.start()]
-            current_gen.control_block_detected = True
-            current_gen.control_tail_buffer = ""
-            logger.warning("🗣️🧭 [Gen %s] Detected tool-call style control leak; truncating spoken text.", current_gen.id)
-            return self.preprocess_chunk(spoken_text) if spoken_text else ""
-
-        overlap = self._delimiter_overlap_length(combined)
-        if overlap:
-            emit_text = combined[:-overlap]
-            current_gen.control_tail_buffer = combined[-overlap:]
-        else:
-            emit_text = combined
-            current_gen.control_tail_buffer = ""
-
-        return self.preprocess_chunk(emit_text) if emit_text else ""
-
-    def _flush_spoken_tail(self, current_gen: RunningGeneration) -> str:
-        if not current_gen.expects_control_block:
-            return ""
-
-        if current_gen.control_block_detected:
-            current_gen.control_tail_buffer = ""
-            return ""
-
-        tail = current_gen.control_tail_buffer
-        current_gen.control_tail_buffer = ""
-        return self.preprocess_chunk(tail) if tail else ""
-
-    def _finalize_control_payload(self, current_gen: RunningGeneration) -> None:
-        if not current_gen.expects_control_block:
-            return
-
-        if not current_gen.control_block_detected:
-            current_gen.control_parse_error = "missing_control_delimiter"
-            logger.warning("🗣️🧭 [Gen %s] Expected a control block, but no delimiter was detected.", current_gen.id)
-            return
-
-        raw_payload = current_gen.control_payload_raw.strip()
-        if not raw_payload:
-            current_gen.control_parse_error = "empty_control_payload"
-            logger.warning("🗣️🧭 [Gen %s] Control delimiter detected, but payload was empty.", current_gen.id)
-            return
-
-        try:
-            parsed = json.loads(raw_payload)
-        except Exception as exc:
-            current_gen.control_parse_error = f"invalid_control_json: {exc}"
-            logger.warning(
-                "🗣️🧭 [Gen %s] Could not parse control payload JSON: %s",
-                current_gen.id,
-                raw_payload,
-            )
-            return
-
-        if not isinstance(parsed, dict):
-            current_gen.control_parse_error = "control_payload_not_object"
-            logger.warning("🗣️🧭 [Gen %s] Control payload was not a JSON object: %s", current_gen.id, raw_payload)
-            return
-
-        current_gen.control_payload = parsed
-        logger.info("🗣️🧭 [Gen %s] Parsed exam control payload: %s", current_gen.id, parsed)
+        return self.preprocess_chunk(chunk)
 
     def clean_quick_answer(self, text: str) -> str:
         """
@@ -579,7 +454,6 @@ class SpeechPipelineManager:
             self.stop_llm_finished_event.clear()
             start_time = time.time()
             token_count = 0
-            handed_off_to_final_worker = False
 
             try:
                 for chunk in current_gen.llm_generator:
@@ -614,18 +488,7 @@ class SpeechPipelineManager:
                             current_gen.quick_answer_overhang = overhang
                             current_gen.quick_answer_provided = True
                             self.llm_answer_ready_event.set() # Signal TTS quick worker
-                            handed_off_to_final_worker = True
                             break
-
-                if not handed_off_to_final_worker and not current_gen.llm_aborted:
-                    flushed_tail = self._flush_spoken_tail(current_gen)
-                    if flushed_tail:
-                        current_gen.spoken_text_detected = True
-                        current_gen.quick_answer += flushed_tail
-                        if self.no_think:
-                            current_gen.quick_answer = self.clean_quick_answer(current_gen.quick_answer)
-
-                    self._finalize_control_payload(current_gen)
 
                 # Loop finished naturally or broke due to stop request
                 logger.info(f"🗣️🧠🏁 [Gen {gen_id}] LLM Worker: Generator loop finished%s" % (" (Aborted)" if current_gen.llm_aborted else ""))
@@ -639,11 +502,6 @@ class SpeechPipelineManager:
                         if self.on_partial_assistant_text:
                             self.on_partial_assistant_text(current_gen.quick_answer)
                         self.llm_answer_ready_event.set() # Signal TTS quick worker
-                    elif current_gen.expects_control_block:
-                        logger.info(f"🗣️🧠✔️ [Gen {gen_id}] LLM Worker: Control-only response detected; no spoken text will be synthesized.")
-                        current_gen.quick_answer_first_chunk_ready = True
-                        current_gen.audio_quick_finished = True
-                        current_gen.audio_final_finished = True
 
             except Exception as e:
                 logger.exception(f"🗣️🧠💥 [Gen {gen_id}] LLM Worker: Error during generation: {e}")
@@ -917,7 +775,7 @@ class SpeechPipelineManager:
                 """Yields remaining text chunks for final TTS synthesis."""
                 # Yield overhang first
                 if current_gen.quick_answer_overhang:
-                    preprocessed_overhang = _strip_control_leak(self.preprocess_chunk(current_gen.quick_answer_overhang))
+                    preprocessed_overhang = self.preprocess_chunk(current_gen.quick_answer_overhang)
                     if preprocessed_overhang:
                         logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Gen: Yielding overhang: '{preprocessed_overhang[:50]}...'")
                         current_gen.final_answer += preprocessed_overhang
@@ -954,18 +812,6 @@ class SpeechPipelineManager:
 
                          yield spoken_chunk
 
-                    flushed_tail = self._flush_spoken_tail(current_gen)
-                    if flushed_tail:
-                        current_gen.spoken_text_detected = True
-                        current_gen.final_answer += flushed_tail
-                        if self.on_partial_assistant_text:
-                            try:
-                                self.on_partial_assistant_text(current_gen.quick_answer + current_gen.final_answer)
-                            except Exception as cb_e:
-                                logger.warning(f"🗣️💥 Callback error in on_partial_assistant_text (flushed tail): {cb_e}")
-                        yield flushed_tail
-
-                    self._finalize_control_payload(current_gen)
                     logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Gen: Finished iterating LLM chunks.")
                 except Exception as gen_e:
                      logger.exception(f"🗣️👄💥 [Gen {gen_id}] Final TTS Gen: Error iterating LLM generator: {gen_e}")
@@ -1035,16 +881,13 @@ class SpeechPipelineManager:
 
         Args:
             payload: Either a plain prompt string or a request dictionary with
-                     `text`, optional `expects_control_block`, and optional
-                     `history_override`.
+                     `text` and optional `history_override`.
         """
         if isinstance(payload, dict):
             txt = payload.get("text", "") or ""
-            expects_control_block = bool(payload.get("expects_control_block", False))
             history_override = payload.get("history_override")
         else:
             txt = payload or ""
-            expects_control_block = False
             history_override = None
 
         # --- Abort existing generation if necessary ---
@@ -1074,7 +917,6 @@ class SpeechPipelineManager:
         # --- Create new generation object ---
         self.running_generation = RunningGeneration(id=new_gen_id)
         self.running_generation.text = txt
-        self.running_generation.expects_control_block = expects_control_block
         self.running_generation.history_override = history_override if isinstance(history_override, list) else None
 
         try:
@@ -1250,7 +1092,6 @@ class SpeechPipelineManager:
         self,
         txt: str,
         *,
-        expects_control_block: bool = False,
         history_override: Optional[list] = None,
     ):
         """
@@ -1261,6 +1102,7 @@ class SpeechPipelineManager:
 
         Args:
             txt: The user input text to be synthesized.
+            history_override: Optional message history to use instead of `self.history`.
         """
         logger.info(f"🗣️📥 Queueing 'prepare' request for: '{txt[:50]}...'")
         self.requests_queue.put(
@@ -1268,7 +1110,6 @@ class SpeechPipelineManager:
                 "prepare",
                 {
                     "text": txt,
-                    "expects_control_block": expects_control_block,
                     "history_override": history_override,
                 },
             )

@@ -13,18 +13,7 @@ python-dotenv
 
 # llm providers
 openai
-langgraph
 
-# database
-supabase
-postgrest
-
-# voice / speaker verification (ECAPA-TDNN)
-speechbrain
+# audio processing
 torchaudio
-pydub
 scipy
-scikit-learn
-
-# multipart uploads for the /voice-reference endpoint
-python-multipart
