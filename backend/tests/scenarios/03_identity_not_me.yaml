@@ -1,0 +1,11 @@
+name: identity_not_me
+description: The customer says the name is wrong, so the agent asks for the number again.
+turns:
+  - say: "07700 900 102"
+    answer_contains: ["James Carter"]
+  - say: "No, that's not me."
+    answer_contains: ["phone number again"]
+  - say: "Sorry, it's 07700 900 101."
+    answer_contains: ["Sara Benali"]
+  - say: "Yes."
+    answer_contains: ["Thanks, Sara"]

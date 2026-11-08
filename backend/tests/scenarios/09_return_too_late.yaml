@@ -1,0 +1,11 @@
+name: return_too_late
+description: James asks to return shoes delivered 45 days ago. That's past the 30-day window.
+phone: "07700 900 102"
+turns:
+  - say: "I'd like to return my trail running shoes."
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: get_order
+        args: {order_id: "1053"}
+    orders_result: done
+    answer_contains: [["30 days", "thirty days", "30-day", "thirty-day"]]

@@ -1,0 +1,9 @@
+name: faq_delivery_cost
+description: A general question is answered from the FAQ, without the orders agent.
+phone: "07700 900 101"
+turns:
+  - say: "How much does delivery cost?"
+    expect_calls:
+      - supervisor: search_faq
+    must_not_call: [ask_orders_agent, transfer_to_human]
+    answer_contains: [["3 pounds 99", "3.99", "three pounds ninety-nine", "three ninety-nine"]]

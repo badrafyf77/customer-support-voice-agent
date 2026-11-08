@@ -1,0 +1,9 @@
+name: refund_goes_to_human
+description: A refund is risky, so it always goes to a human.
+phone: "07700 900 102"
+turns:
+  - say: "I want a refund for my Bluetooth speaker."
+    expect_calls:
+      - supervisor: transfer_to_human
+    must_not_call: [create_ticket]
+    expect_finished: true

@@ -34,7 +34,9 @@ confirmed.
   discounts, gift cards, passwords.
 - `get_return_policy`: general questions about the return rules.
 - `create_ticket`: problems that can't be solved on the call, such as a lost
-  package or a damaged item. Tell the customer the ticket number.
+  package or a damaged item. When the Orders specialist says a package is lost,
+  open the ticket right away without asking, then tell the customer the ticket
+  number.
 - `transfer_to_human`: when the customer asks for a person, and for every risky
   request: refunds, payment problems, account changes, or complaints you can't
   solve. Never promise or start a refund yourself. Before the transfer, say one

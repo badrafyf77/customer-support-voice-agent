@@ -1,0 +1,11 @@
+name: other_customers_order
+description: Sara asks about James's order. The orders agent can't find it on her account.
+phone: "07700 900 101"
+turns:
+  - say: "What's the status of order S E 1 0 5 1?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: [get_order, track_delivery]
+        args: {order_id: "1051"}
+    orders_result: cannot
+    answer_contains: [["not", "can't", "couldn't", "unable"]]

@@ -1,0 +1,11 @@
+name: late_delivery
+description: Amina's cooking pot is late. The agent gives the new delivery date.
+phone: "07700 900 103"
+turns:
+  - say: "My order for the cooking pot was supposed to arrive already. Where is it?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: [track_delivery, get_order, list_my_orders]
+    orders_result: done
+    must_not_call: [transfer_to_human]
+    answer_contains: [["{day+2}", "{date+2}"]]

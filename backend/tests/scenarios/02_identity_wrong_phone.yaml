@@ -1,0 +1,10 @@
+name: identity_wrong_phone
+description: An unknown phone number three times ends with a transfer to a human.
+turns:
+  - say: "It's zero one two three four, five six seven eight nine zero."
+    answer_contains: ["couldn't find an account"]
+  - say: "Zero one two three four, five six seven eight nine zero."
+    answer_contains: ["couldn't find an account"]
+  - say: "I said zero one two three four five six seven eight nine zero!"
+    answer_contains: ["colleague"]
+    expect_finished: true

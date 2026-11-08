@@ -1,0 +1,17 @@
+name: several_orders_needs_info
+description: Omar has two parcels on the way and doesn't say which one, so the orders agent asks.
+phone: "07700 900 106"
+turns:
+  - say: "Hi, where is my parcel?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: list_my_orders
+    orders_result: needs_info
+    must_not_call: [transfer_to_human, create_ticket]
+    answer_contains: [["grinder", "organiser", "organizer"]]
+  - say: "The desk organiser."
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: [track_delivery, get_order, list_my_orders]
+    orders_result: done
+    answer_contains: [["{day+3}", "{date+3}"]]

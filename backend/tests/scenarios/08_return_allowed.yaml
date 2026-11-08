@@ -1,0 +1,12 @@
+name: return_allowed
+description: James asks to return a speaker delivered 10 days ago. It's allowed, and the agent gives the deadline.
+phone: "07700 900 102"
+turns:
+  - say: "Can I still return the Bluetooth speaker I bought?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: get_order
+        args: {order_id: "1051"}
+    orders_result: done
+    must_not_call: [transfer_to_human]
+    answer_contains: [["{date+20}", "{day+20}"]]

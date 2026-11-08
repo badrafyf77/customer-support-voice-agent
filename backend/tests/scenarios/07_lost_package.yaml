@@ -1,0 +1,12 @@
+name: lost_package
+description: Daniel's smart watch is lost. The supervisor opens a ticket and reads the number.
+phone: "07700 900 104"
+turns:
+  - say: "My smart watch never arrived. It's been almost two weeks."
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: [track_delivery, get_order, list_my_orders]
+      - supervisor: create_ticket
+    orders_result: done
+    must_not_call: [transfer_to_human]
+    answer_contains: [["4 8 0 1", "4801"]]

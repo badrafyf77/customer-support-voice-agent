@@ -1,0 +1,9 @@
+name: return_policy_general
+description: A general return question is answered from the return policy.
+phone: "07700 900 101"
+turns:
+  - say: "How many days do I have to send something back?"
+    expect_calls:
+      - supervisor: get_return_policy
+    must_not_call: [ask_orders_agent, transfer_to_human]
+    answer_contains: [["30", "thirty"]]

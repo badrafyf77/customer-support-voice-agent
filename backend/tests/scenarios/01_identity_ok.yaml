@@ -1,0 +1,9 @@
+name: identity_ok
+description: The customer gives their phone number and confirms their name, then gets greeted by name.
+turns:
+  - say: "Sure, it's zero seven seven zero zero, nine zero zero, one zero one."
+    answer_contains: ["Sara Benali"]
+    must_not_call: [ask_orders_agent, search_faq]
+  - say: "Yes, that's me."
+    answer_contains: ["Thanks, Sara"]
+    must_not_call: [ask_orders_agent, search_faq]

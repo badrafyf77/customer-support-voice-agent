@@ -1,0 +1,13 @@
+name: track_single_order
+description: Sara asks where her one order is. The orders agent tracks it in the background.
+phone: "zero seven seven zero zero nine zero zero one zero one"
+turns:
+  - say: "Where is my order S E 1 0 4 2?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+        args: {request: "1042"}
+      - orders: [track_delivery, get_order]
+        args: {order_id: "1042"}
+    orders_result: done
+    must_not_call: [transfer_to_human, create_ticket]
+    answer_contains: [["{day+2}", "{date+2}"]]

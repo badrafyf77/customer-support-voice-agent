@@ -1,0 +1,9 @@
+name: ask_for_human
+description: The customer asks for a person and is transferred.
+phone: "07700 900 101"
+turns:
+  - say: "Can I speak to a real person, please?"
+    expect_calls:
+      - supervisor: transfer_to_human
+    must_not_call: [create_ticket]
+    expect_finished: true

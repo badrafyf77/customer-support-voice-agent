@@ -1,0 +1,11 @@
+name: non_returnable_item
+description: Laura asks to return underwear, which can never be returned.
+phone: "07700 900 105"
+turns:
+  - say: "Can I return the boxer briefs from my last order?"
+    expect_calls:
+      - supervisor: ask_orders_agent
+      - orders: get_order
+        args: {order_id: "1081"}
+    orders_result: done
+    answer_contains: [["can't", "cannot", "not able", "isn't possible", "not possible", "can not"]]
