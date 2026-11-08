@@ -73,14 +73,14 @@ TTS_ORPHEUS_MODEL = "Orpheus_3B-1BaseGGUF/mOrpheus_3B-1Base_Q4_K_M.gguf"
 TTS_ORPHEUS_MODEL = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf"
 
 # LLM configuration - only vLLM and OpenAI are supported.
-LLM_START_PROVIDER = (get_env("LLM_PROVIDER", "vllm") or "vllm").strip().lower()
+LLM_START_PROVIDER = (get_env("LLM_PROVIDER", "openai") or "openai").strip().lower()
 if LLM_START_PROVIDER not in {"vllm", "openai"}:
     logger.warning(
-        "🖥️⚠️ Unsupported LLM_PROVIDER '%s'. Falling back to 'vllm'. Supported: vllm, openai.",
+        "🖥️⚠️ Unsupported LLM_PROVIDER '%s'. Falling back to 'openai'. Supported: vllm, openai.",
         LLM_START_PROVIDER,
     )
-    LLM_START_PROVIDER = "vllm"
-LLM_START_MODEL = get_env("LLM_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
+    LLM_START_PROVIDER = "openai"
+LLM_START_MODEL = get_env("LLM_MODEL", "gpt-5.4-mini")
 
 NO_THINK = False
 DIRECT_STREAM = TTS_START_ENGINE=="orpheus"
@@ -222,7 +222,7 @@ async def lifespan(app):
     agent_config = load_agent_config(agent_name)
     app.state.AGENT_CONFIG = agent_config
 
-    configured_llm_provider = (agent_config.get("llm_provider") or LLM_START_PROVIDER or "vllm").strip().lower()
+    configured_llm_provider = (agent_config.get("llm_provider") or LLM_START_PROVIDER or "openai").strip().lower()
     if configured_llm_provider not in {"vllm", "openai"}:
         logger.warning(
             "🖥️⚠️ Unsupported configured llm_provider '%s'. Falling back to '%s'.",
@@ -236,6 +236,7 @@ async def lifespan(app):
     configured_language = agent_config.get("language") or LANGUAGE
     configured_orpheus_model = agent_config.get("orpheus_model") or TTS_ORPHEUS_MODEL
     configured_no_think = bool(agent_config.get("no_think", NO_THINK))
+    configured_reasoning_effort = agent_config.get("reasoning_effort") or None
 
     # Apply STT model config before warmed runtimes create their transcribers.
     try:
@@ -250,7 +251,8 @@ async def lifespan(app):
 
     logger.info(
         f"🖥️⚙️ {Colors.apply('[LLM]').blue} Provider: {Colors.apply(configured_llm_provider).blue}, "
-        f"Model: {Colors.apply(configured_llm_model).blue}"
+        f"Model: {Colors.apply(configured_llm_model).blue}, "
+        f"Reasoning effort: {Colors.apply(str(configured_reasoning_effort or 'default')).blue}"
     )
     
     # Store the configuration used to build speech runtimes.
@@ -260,6 +262,7 @@ async def lifespan(app):
         "llm_provider": configured_llm_provider,
         "llm_model": configured_llm_model,
         "no_think": configured_no_think,
+        "reasoning_effort": configured_reasoning_effort,
         "orpheus_model": configured_orpheus_model,
     }
     

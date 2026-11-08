@@ -127,6 +127,7 @@ class SpeechPipelineManager:
             llm_provider: str = "vllm",
             llm_model: str = "hf.co/bartowski/huihui-ai_Mistral-Small-24B-Instruct-2501-abliterated-GGUF:Q4_K_M",
             no_think: bool = False,
+            reasoning_effort: Optional[str] = None,
             orpheus_model: str = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
             # Performance optimization
             skip_prewarm: bool = False,
@@ -145,6 +146,7 @@ class SpeechPipelineManager:
             llm_provider: The LLM backend provider ("vllm" or "openai").
             llm_model: The specific LLM model identifier.
             no_think: If True, removes specific thinking tags from LLM output.
+            reasoning_effort: Reasoning effort for GPT-5 style models (e.g. "low").
             orpheus_model: Path or identifier for the Orpheus TTS model, if used.
             system_prompt: Custom system prompt (if None, uses default from file).
         """
@@ -181,6 +183,7 @@ class SpeechPipelineManager:
             model=self.llm_model,
             system_prompt=self.system_prompt,
             no_think=no_think,
+            reasoning_effort=reasoning_effort,
         )
         if not skip_prewarm:
             prewarm_success = self.llm.prewarm()

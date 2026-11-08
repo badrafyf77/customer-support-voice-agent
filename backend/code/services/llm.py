@@ -53,6 +53,43 @@ except Exception:
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8000/v1")
 
+# Reasoning models (GPT-5 family, o-series) reject sampling settings such as
+# temperature and accept a reasoning_effort setting instead.
+REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+SAMPLING_KWARGS = ("temperature", "top_p", "frequency_penalty", "presence_penalty")
+
+
+def is_reasoning_model(model: str) -> bool:
+    name = (model or "").strip().lower().rsplit("/", 1)[-1]
+    return name.startswith(REASONING_MODEL_PREFIXES)
+
+
+def build_request_kwargs(
+    backend: str,
+    model: str,
+    reasoning_effort: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Return the extra chat-completion settings that this model accepts."""
+    request_kwargs = dict(kwargs)
+    if is_reasoning_model(model):
+        for key in SAMPLING_KWARGS:
+            request_kwargs.pop(key, None)
+        if "max_tokens" in request_kwargs:
+            request_kwargs["max_completion_tokens"] = request_kwargs.pop("max_tokens")
+        if reasoning_effort and "reasoning_effort" not in request_kwargs:
+            request_kwargs["reasoning_effort"] = reasoning_effort
+        return request_kwargs
+
+    request_kwargs.pop("reasoning_effort", None)
+    if "temperature" not in request_kwargs:
+        request_kwargs["temperature"] = 0.8 if backend == "vllm" else 0.7
+    if "frequency_penalty" not in request_kwargs:
+        request_kwargs["frequency_penalty"] = 0.25
+    if "presence_penalty" not in request_kwargs:
+        request_kwargs["presence_penalty"] = 0.1
+    return request_kwargs
+
 
 def _create_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
     if not OPENAI_AVAILABLE:
@@ -86,6 +123,7 @@ class LLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         no_think: bool = False,
+        reasoning_effort: Optional[str] = None,
     ):
         self.backend = (backend or "").strip().lower()
         if self.backend not in self.SUPPORTED_BACKENDS:
@@ -98,6 +136,7 @@ class LLM:
 
         self.model = model
         self.no_think = no_think
+        self.reasoning_effort = reasoning_effort or None
         self._provided_api_key = api_key
         self._provided_base_url = base_url
 
@@ -123,9 +162,10 @@ class LLM:
         self._requests_lock = Lock()
 
         logger.info(
-            "🤖⚙️ LLM initialized (backend=%s, model=%s, base_url=%s)",
+            "🤖⚙️ LLM initialized (backend=%s, model=%s, reasoning_effort=%s, base_url=%s)",
             self.backend,
             self.model,
+            self.reasoning_effort or "default",
             self.effective_base_url or "default",
         )
 
@@ -261,12 +301,7 @@ class LLM:
             user_text = f"{text}/nothink" if self.no_think else text
             messages.append({"role": "user", "content": user_text})
 
-        if "temperature" not in kwargs:
-            kwargs["temperature"] = 0.8 if self.backend == "vllm" else 0.7
-        if "frequency_penalty" not in kwargs:
-            kwargs["frequency_penalty"] = 0.25
-        if "presence_penalty" not in kwargs:
-            kwargs["presence_penalty"] = 0.1
+        kwargs = build_request_kwargs(self.backend, self.model, self.reasoning_effort, **kwargs)
 
         stream = None
         try:
