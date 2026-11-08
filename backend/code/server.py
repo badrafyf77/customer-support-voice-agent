@@ -6,15 +6,15 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from agents.chat.agent import build_chat_agent
-from core.config import load_agent_config
+from agents.support.agent import build_support_agent
+from core.config import get_env, load_agent_config
 from core.logsetup import setup_logging
 from core.session import lifespan, run_session
 
 setup_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "chat"
+AGENT_NAME = get_env("VOICE_AGENT", "support") or "support"
 
 app = FastAPI(lifespan=lifespan)
 app.state.AGENT_NAME = AGENT_NAME
@@ -42,7 +42,7 @@ async def get_index() -> JSONResponse:
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    brain = build_chat_agent({})
+    brain = build_support_agent({})
     config = getattr(app.state, "AGENT_CONFIG", None) or load_agent_config(AGENT_NAME)
     config = {**config, "agent_name": AGENT_NAME}
     await run_session(websocket, brain, config, app.state)

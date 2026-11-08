@@ -889,9 +889,11 @@ class SpeechPipelineManager:
         if isinstance(payload, dict):
             txt = payload.get("text", "") or ""
             history_override = payload.get("history_override")
+            stream_factory = payload.get("stream")
         else:
             txt = payload or ""
             history_override = None
+            stream_factory = None
 
         # --- Abort existing generation if necessary ---
         id_in_spec = self.generation_counter + 1 # Prospective ID for logging
@@ -923,14 +925,19 @@ class SpeechPipelineManager:
         self.running_generation.history_override = history_override if isinstance(history_override, list) else None
 
         try:
-            logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Calling LLM generate...")
-            
-            # History is managed in server.py, not here
-            self.running_generation.llm_generator = self.llm.generate(
-                text=txt,
-                history=self.running_generation.history_override if self.running_generation.history_override is not None else self.history,
-                use_system_prompt=True,
-            )
+            if stream_factory is not None:
+                # The agent runs its own model calls and tools inside this generator.
+                logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Using the agent's text stream...")
+                self.running_generation.llm_generator = stream_factory()
+            else:
+                logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Calling LLM generate...")
+
+                # History is managed in server.py, not here
+                self.running_generation.llm_generator = self.llm.generate(
+                    text=txt,
+                    history=self.running_generation.history_override if self.running_generation.history_override is not None else self.history,
+                    use_system_prompt=True,
+                )
             
             logger.info(f"🗣️🧠✔️ [Gen {new_gen_id}] LLM generator created. Setting generator ready event.")
             self.generator_ready_event.set() # Signal LLM worker
@@ -1096,6 +1103,7 @@ class SpeechPipelineManager:
         txt: str,
         *,
         history_override: Optional[list] = None,
+        stream: Optional[Callable[[], Any]] = None,
     ):
         """
         Public method to request the preparation of a new speech generation.
@@ -1106,6 +1114,8 @@ class SpeechPipelineManager:
         Args:
             txt: The user input text to be synthesized.
             history_override: Optional message history to use instead of `self.history`.
+            stream: Optional function returning a text generator. When given, its
+                    text is spoken instead of calling the pipeline's own LLM.
         """
         logger.info(f"🗣️📥 Queueing 'prepare' request for: '{txt[:50]}...'")
         self.requests_queue.put(
@@ -1114,6 +1124,7 @@ class SpeechPipelineManager:
                 {
                     "text": txt,
                     "history_override": history_override,
+                    "stream": stream,
                 },
             )
         )

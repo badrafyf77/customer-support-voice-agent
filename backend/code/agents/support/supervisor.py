@@ -125,6 +125,13 @@ class Supervisor:
         self.job: OrdersJob | None = None
         self.job_count = 0
         self.background: queue.Queue[dict[str, Any]] = queue.Queue()
+        self.tracer.event(
+            "call_start",
+            "code",
+            model_or_tool=llm.model,
+            orders_model=orders_llm.model,
+            settings=vars(self.settings),
+        )
 
     # --- What the runtime calls ---------------------------------------------------
 
@@ -138,6 +145,9 @@ class Supervisor:
         self.tracer.new_turn()
         self.tracer.event("user_said", "code", input=text)
         if self.finished:
+            return
+        if self._elapsed() >= self.settings.call_limit_seconds:
+            yield from self.call_time_check()
             return
 
         if not self.identity.done:
@@ -170,9 +180,21 @@ class Supervisor:
                 self.messages.append({"role": "system", "content": item["message"]})
             yield from self._ai_turn()
 
+    def _elapsed(self) -> float:
+        return self.clock() - self.started_at
+
+    def call_time_due(self) -> bool:
+        """True when ``call_time_check()`` has something to say."""
+        if self.finished:
+            return False
+        elapsed = self._elapsed()
+        return elapsed >= self.settings.call_limit_seconds or (
+            elapsed >= self.settings.call_warning_seconds and not self.call_warning_given
+        )
+
     def call_time_check(self) -> Iterator[str]:
         """Speak the call-limit warning or the goodbye when it is time. Empty otherwise."""
-        elapsed = self.clock() - self.started_at
+        elapsed = self._elapsed()
         if self.finished:
             return
         if elapsed >= self.settings.call_limit_seconds:
@@ -187,11 +209,20 @@ class Supervisor:
             self._spoken(CALL_LIMIT_WARNING_TEXT)
             yield CALL_LIMIT_WARNING_TEXT
 
-    def close(self) -> None:
-        """The customer hung up: forget any running job."""
+    def close(self, reason: str = "call_ended") -> None:
+        """The call is over: forget any running job and write the last trace line."""
+        if self.closed:
+            return
         self.closed = True
         if self.job and not self.job.done:
             self.tracer.event("agent_result", "code", input=self.job.request, output="cancelled: the call ended")
+        self.tracer.event(
+            "call_end",
+            "code",
+            input=reason,
+            output={"finish_reason": self.finish_reason, "customer_id": self.ctx.customer_id},
+            duration_ms=self._elapsed() * 1000,
+        )
 
     # --- Identity -----------------------------------------------------------------
 

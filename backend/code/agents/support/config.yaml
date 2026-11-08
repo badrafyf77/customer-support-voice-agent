@@ -7,3 +7,7 @@ llm_provider: openai
 llm_model: gpt-5.4-mini
 reasoning_effort: low
 language: en
+# Limits
+max_tool_calls: 5
+call_warning_seconds: 840  # 14 minutes
+call_limit_seconds: 900    # 15 minutes

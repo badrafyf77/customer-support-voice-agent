@@ -25,6 +25,7 @@ import time
 import threading # Keep threading for SpeechPipelineManager internals and AbortWorker
 import sys
 import re
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import urlopen
@@ -218,7 +219,7 @@ async def lifespan(app):
     """
     logger.info("🖥️▶️ Server starting up")
     
-    agent_name = getattr(app.state, "AGENT_NAME", get_env("VOICE_AGENT", "chat") or "chat")
+    agent_name = getattr(app.state, "AGENT_NAME", get_env("VOICE_AGENT", "support") or "support")
     agent_config = load_agent_config(agent_name)
     app.state.AGENT_CONFIG = agent_config
 
@@ -347,10 +348,15 @@ def format_timestamp_ns(timestamp_ns: int) -> str:
     return formatted_timestamp
 
 
+def _new_session_id() -> str:
+    """A readable, sortable id like 20261108-153012-a1b2c3 (also the trace file name)."""
+    return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+
 def _build_session_context(conn_state, reason: str) -> SessionContext:
     return SessionContext(
-        session_id=str(id(conn_state)),
-        agent_name=getattr(conn_state, "agent_name", "chat"),
+        session_id=getattr(conn_state, "session_id", None) or str(id(conn_state)),
+        agent_name=getattr(conn_state, "agent_name", "support"),
         user_id=getattr(conn_state, "user_id", None),
         conversation_history=list(getattr(conn_state, "conversation_history", []) or []),
         call_state={
@@ -400,14 +406,81 @@ async def trigger_agent_turn(
         logger.info("🧭 No agent turn to trigger (%s).", reason)
         return False
 
+    _start_agent_result(conn_state, callbacks, agent_result, reason)
+    return True
+
+
+def _start_agent_result(conn_state, callbacks: 'TranscriptionCallbacks', agent_result: AgentResult, reason: str) -> None:
     logger.info("🧭 Triggering agent turn (%s).", reason)
+    conn_state.last_turn_started_at = time.time()
     callbacks.prepare_assistant_turn()
     conn_state.pipeline_manager.history = conn_state.conversation_history
-    conn_state.pipeline_manager.prepare_generation(
-        agent_result.text,
-        history_override=agent_result.history_override,
+    if agent_result.action == "stream":
+        conn_state.pipeline_manager.prepare_generation(
+            agent_result.text or f"[{reason}]",
+            stream=agent_result.stream,
+        )
+    else:
+        conn_state.pipeline_manager.prepare_generation(
+            agent_result.text,
+            history_override=agent_result.history_override,
+        )
+
+
+IDLE_CHECK_INTERVAL_SECONDS = 0.25
+# Nobody must be speaking for this long before the agent starts a turn by itself.
+IDLE_SETTLE_SECONDS = 0.6
+# A turn that just started may not have reached the pipeline yet.
+TURN_START_GRACE_SECONDS = 2.0
+
+
+def _someone_is_speaking(conn_state, callbacks: 'TranscriptionCallbacks') -> bool:
+    return (
+        conn_state.pipeline_manager.running_generation is not None
+        or callbacks.tts_client_playing
+        or not callbacks.silence_active
+        or time.time() - getattr(conn_state, "last_turn_started_at", 0.0) < TURN_START_GRACE_SECONDS
     )
-    return True
+
+
+async def watch_idle_agent_turns(
+    conn_state,
+    callbacks: 'TranscriptionCallbacks',
+    message_queue: asyncio.Queue,
+) -> None:
+    """Let the agent start a turn by itself when nobody is speaking.
+
+    The support agent uses this to give answers that were prepared in the
+    background, to warn about the call time limit, and to end the call after
+    a transfer once the goodbye has been spoken.
+    """
+    brain = conn_state.brain
+    idle_since = None
+    try:
+        while True:
+            await asyncio.sleep(IDLE_CHECK_INTERVAL_SECONDS)
+            if conn_state.session_finished or getattr(conn_state, "finish_in_progress", False):
+                continue
+            if _someone_is_speaking(conn_state, callbacks):
+                idle_since = None
+                continue
+            idle_since = idle_since or time.time()
+            if time.time() - idle_since < IDLE_SETTLE_SECONDS:
+                continue
+
+            try:
+                agent_result: AgentResult = await brain.idle_turn(_build_session_context(conn_state, "idle"))
+            except Exception as exc:
+                logger.exception("🧭 Agent idle turn failed: %s", exc)
+                continue
+
+            if agent_result.action == "finish":
+                await trigger_session_finish(conn_state, callbacks, message_queue, reason="agent_decided_session_complete")
+            elif not agent_result.is_empty:
+                _start_agent_result(conn_state, callbacks, agent_result, "agent_idle_turn")
+                idle_since = None
+    except asyncio.CancelledError:
+        pass
 
 
 async def trigger_session_finish(
@@ -1131,6 +1204,7 @@ class TranscriptionCallbacks:
                     "content": self.assistant_answer
                 })
 
+        self.conn_state.last_turn_started_at = time.time()
         logger.info(f"🖥️🧠 Adding user request to history: '{user_request_content}'")
         # Use connection-specific conversation history
         self.conn_state.conversation_history.append(_conversation_message("user", user_request_content))
@@ -1431,8 +1505,10 @@ async def run_session(
             self.finish_in_progress = False
             self.lock_microphone_until_finish = False
             self.brain = brain
-            self.agent_name = config.get("agent_name", "chat")
+            self.agent_name = config.get("agent_name", "support")
             self.user_id = user_id
+            self.session_id = _new_session_id()
+            self.last_turn_started_at = 0.0
 
     conn_state = ConnectionState(runtime)
 
@@ -1474,6 +1550,7 @@ async def run_session(
             asyncio.create_task(conn_state.audio_processor.process_chunk_queue(audio_chunks)),
             asyncio.create_task(send_text_messages(ws, message_queue)),
             asyncio.create_task(send_tts_chunks(conn_state, message_queue, callbacks)),
+            asyncio.create_task(watch_idle_agent_turns(conn_state, callbacks, message_queue)),
         ]
         
         # NOW send "ready" status - everything is initialized and tasks are running
@@ -1502,6 +1579,15 @@ async def run_session(
         logger.error(f"🖥️💥 {Colors.apply('ERROR').red} in WebSocket session {connection_id}: {repr(e)}")
     finally:
         log_event("👋", f"[User {display_id}] Disconnected")
+
+        if conn_state:
+            try:
+                await brain.close_session(
+                    conn_state,
+                    "session_finished" if conn_state.session_finished else "client_disconnected",
+                )
+            except Exception as exc:
+                logger.warning("🖥️⚠️ Could not close the agent session: %s", exc)
         
         # Save conversation transcript if the session has not already been finished and saved.
         if conn_state and len(conn_state.conversation_history) > 0 and not conn_state.session_finished:

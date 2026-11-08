@@ -30,3 +30,14 @@ class BaseAgent(ABC):
     async def save_progress(self, conn_state: Any) -> None:
         """Persist the session when the client disconnects. No-op by default."""
         return None
+
+    async def idle_turn(self, session: SessionContext) -> AgentResult:
+        """Called often while nobody is speaking. Return a turn to start one by itself.
+
+        Used for answers that were prepared in the background. Ignored by default.
+        """
+        return AgentResult.ignore()
+
+    async def close_session(self, conn_state: Any, reason: str) -> None:
+        """Called once when the WebSocket session ends, for any reason. No-op by default."""
+        return None

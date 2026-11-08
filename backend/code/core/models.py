@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Iterator, Literal
 import re
 
 ConversationRole = Literal["system", "user", "assistant"]
@@ -44,7 +44,7 @@ class SessionContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-AgentAction = Literal["ignore", "generate", "finish"]
+AgentAction = Literal["ignore", "generate", "stream", "finish"]
 
 
 @dataclass(frozen=True)
@@ -53,17 +53,24 @@ class AgentResult:
 
     - ``ignore``: do nothing.
     - ``generate``: send ``text`` to the LLM and speak the answer.
+    - ``stream``: speak the text that ``stream()`` yields. The agent runs its own
+      model calls and tools inside that generator.
     - ``finish``: end the session.
     """
 
     text: str = ""
     action: AgentAction = "ignore"
     history_override: list[dict[str, str]] | None = None
+    stream: Callable[[], Iterator[str]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        return self.action == "ignore" or (self.action == "generate" and not self.text)
+        return (
+            self.action == "ignore"
+            or (self.action == "generate" and not self.text)
+            or (self.action == "stream" and self.stream is None)
+        )
 
     @classmethod
     def ignore(cls) -> "AgentResult":
@@ -72,6 +79,11 @@ class AgentResult:
     @classmethod
     def generate(cls, text: str, history_override: list[dict[str, str]] | None = None) -> "AgentResult":
         return cls(text=text, action="generate", history_override=history_override)
+
+    @classmethod
+    def speak_stream(cls, stream: Callable[[], Iterator[str]], label: str = "") -> "AgentResult":
+        """Speak what ``stream()`` yields. ``stream`` is only called when speaking starts."""
+        return cls(text=label, action="stream", stream=stream)
 
     @classmethod
     def finish(cls) -> "AgentResult":

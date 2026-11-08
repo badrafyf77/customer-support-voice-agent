@@ -35,6 +35,9 @@ services:
     volumes:
       - huggingface_cache:/home/appuser/.cache/huggingface
       - torch_cache:/home/appuser/.cache/torch
+      # One trace file per call, and the ShopEasy database, kept on the host.
+      - ./logs:/app/logs
+      - ./data:/app/data
     # Remove this whole "deploy" block if your cloud VM has no NVIDIA GPU.
     deploy:
       resources:
