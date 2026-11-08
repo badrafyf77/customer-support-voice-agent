@@ -117,8 +117,9 @@ class IdentityCheck:
 
     def _handle_phone(self, text: str) -> IdentityReply:
         number = spoken_digits(text)
-        if len(number) < 4:
-            number = ""  # "Oh, my parcel is late" is not a phone number
+        if len(number) < 5:
+            # "Oh, my parcel is late" or "order SE-1042 is late" is not a phone number.
+            number = ""
         self.phone_attempts += 1
 
         if not number:

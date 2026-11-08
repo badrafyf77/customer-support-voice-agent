@@ -49,12 +49,16 @@ class ToolLoop:
         self.tool_calls_made = 0
         self.final_text = ""
         self.limit_hit = False
+        # Text of the model call that is streaming right now. If the customer
+        # interrupts, this is what they actually heard from it.
+        self.pending_text = ""
 
     def run(self, messages: list[dict[str, Any]]) -> Iterator[str]:
         """Yield the reply text. ``messages`` gets the new assistant and tool messages."""
         while True:
             tools_allowed = self.tool_calls_made < self.max_tool_calls
             text, calls = yield from self._one_model_call(messages, tools_allowed)
+            self.pending_text = ""
 
             assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
             if calls:
@@ -100,6 +104,7 @@ class ToolLoop:
             for event in self.llm.stream_chat(messages, tools=self.tools or None, **kwargs):
                 if isinstance(event, TextDelta):
                     text_parts.append(event.text)
+                    self.pending_text += event.text
                     yield event.text
                 elif isinstance(event, ToolCalls):
                     calls = event.calls

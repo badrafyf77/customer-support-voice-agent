@@ -113,3 +113,9 @@ def test_every_step_is_traced(check):
     assert [line["stage"] for line in lines] == [ASK_PHONE, CONFIRM_NAME, VERIFIED]
     assert lines[-1]["customer_id"] == "C001"
     assert lines[1]["input"] == "07700900101"
+
+
+def test_order_number_is_not_taken_for_a_phone_number(check):
+    reply = check.handle("Hi, my parcel SE-1042 is late")
+    assert "phone number on your account" in reply.say
+    assert check.early_requests == ["Hi, my parcel SE-1042 is late"]
