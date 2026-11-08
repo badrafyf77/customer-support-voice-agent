@@ -1,0 +1,6 @@
+# The orders agent works in the background and must follow the rules
+# carefully, so it uses a stronger model than the supervisor.
+llm_provider: openai
+llm_model: gpt-5.5
+reasoning_effort: medium
+max_tool_calls: 5
