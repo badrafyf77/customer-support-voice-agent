@@ -144,6 +144,18 @@ class Tracer:
         return event_id
 
     @contextmanager
+    def parent(self, parent_id: str | None) -> Iterator[None]:
+        """Make lines written in this thread point to ``parent_id`` (for helper threads)."""
+        stack = self._stack()
+        if parent_id is not None:
+            stack.append(parent_id)
+        try:
+            yield
+        finally:
+            if parent_id is not None:
+                stack.pop()
+
+    @contextmanager
     def span(
         self,
         kind: str,
