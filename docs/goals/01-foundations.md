@@ -15,6 +15,17 @@ A human support worker follows steps, and our agent should too:
 
 For each step, we decide who does it: **the AI**, **plain code**, or **a human**.
 
+| Step | Who does it | How |
+| --- | --- | --- |
+| 1. Find out who the customer is | Plain code | Asks for the phone number, keeps only the digits, looks it up. |
+| 2. Check their identity | Plain code | "Am I speaking with Sara Benali?" Yes or no. 3 tries, then a transfer. |
+| 3. Understand the problem | AI (supervisor) | Listens and decides which tool or helper agent to use. |
+| 4. Look up the data | AI (orders agent) + code | The orders agent picks the tools; code runs them, only for the verified customer. |
+| 5. Check the company rules | AI (orders agent) | Reads the return policy and the order, and says what is allowed. |
+| 6. Do the action | Code, or a human for risky actions | Tickets are saved by code. Refunds and other risky requests go to a human. |
+| 7. Confirm with the customer | AI (supervisor) | Says the result in short spoken sentences. |
+| 8. Write a summary | AI (later phase) | Written after the call ends, so the customer never waits. |
+
 ## Don't give the AI too much freedom
 
 The course says companies prefer agents that are predictable. So:
