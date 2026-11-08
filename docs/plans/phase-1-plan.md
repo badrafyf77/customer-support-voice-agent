@@ -1,6 +1,6 @@
 # Phase 1 Plan: Foundations
 
-Status: **draft, waiting for review**. No code is written until this plan is approved.
+Status: **approved and built** on the `phase-1` branch. Still to check: the scenarios with the real models, and one voice call.
 
 This plan comes from the design questions we went through together. Section 1
 lists every decision, so nothing is hidden. Section 3 is the work, in order.
@@ -92,10 +92,13 @@ Customer speaks
 The orders agent always returns JSON (structured data) in one of three shapes:
 
 ```json
-{"status": "done",       "message": "Order SE-1042 is out for delivery, arriving Thursday 12 Nov.", "data": {...}}
-{"status": "needs_info", "message": "The customer has 3 orders. Which one: SE-1042 (headphones), SE-1051 (shoes), SE-1060 (lamp)?"}
-{"status": "cannot",     "message": "Order SE-1099 is not on this customer's account."}
+{"status": "done",       "message": "Order SE-1042 is out for delivery, arriving Thursday 12 Nov.", "order_ids": ["SE-1042"]}
+{"status": "needs_info", "message": "The customer has 3 orders. Which one: SE-1042 (headphones), SE-1051 (shoes), SE-1060 (lamp)?", "order_ids": []}
+{"status": "cannot",     "message": "Order SE-1099 is not on this customer's account.", "order_ids": []}
 ```
+
+(Built with `order_ids` instead of a free `data` field: OpenAI's strict JSON
+mode needs every field's shape fixed in advance.)
 
 ### Limits
 

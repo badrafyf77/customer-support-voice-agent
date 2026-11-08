@@ -16,24 +16,27 @@ Tick a box (`[x]`) when a task is done.
 
 The detailed plan is in [../plans/phase-1-plan.md](../plans/phase-1-plan.md).
 
+Still open: the two unticked items below need a run with a valid OpenAI key
+(`pytest -m llm`), and one real voice call in Docker.
+
 - [ ] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the
       supervisor and `gpt-5.5` for the orders agent. The GPU stays for speech,
       voice detection and turn detection. See [03-tools.md](./03-tools.md).
-- [ ] Build the fake ShopEasy database (customers, orders, deliveries, return
+- [x] Build the fake ShopEasy database (customers, orders, deliveries, return
       policy, FAQ, tickets, handoffs). See [README.md](./README.md#the-fake-company).
-- [ ] Add tool calling to the AI, with a limit of 5 tool calls per answer.
-- [ ] Build the tools: `search_faq`, `get_return_policy`, `create_ticket`,
+- [x] Add tool calling to the AI, with a limit of 5 tool calls per answer.
+- [x] Build the tools: `search_faq`, `get_return_policy`, `create_ticket`,
       `transfer_to_human` (supervisor), and `list_my_orders`, `get_order`,
       `track_delivery` (orders agent).
-- [ ] Add the supervisor (talks to the customer) and the orders agent (works in
+- [x] Add the supervisor (talks to the customer) and the orders agent (works in
       the background and only reports to the supervisor). See
       [05-multi-agent.md](./05-multi-agent.md).
-- [ ] Let the supervisor keep talking while the orders agent works, and give the
+- [x] Let the supervisor keep talking while the orders agent works, and give the
       result when nobody is speaking.
-- [ ] Add the fixed first steps of a call in plain code: find the customer by
+- [x] Add the fixed first steps of a call in plain code: find the customer by
       phone number, then confirm their name. See [01-foundations.md](./01-foundations.md).
-- [ ] Add the limits: 5 tool calls per answer, 5 per orders job, 15 minutes per call.
-- [ ] Save a trace line for every step, one file per call.
+- [x] Add the limits: 5 tool calls per answer, 5 per orders job, 15 minutes per call.
+- [x] Save a trace line for every step, one file per call.
 - [ ] Add a text-only test runner and 15 YAML test scenarios that check the
       exact tool and agent calls.
 
