@@ -22,10 +22,10 @@ Still open (2026-11-09):
   `several_orders_needs_info` scenario still failed (the supervisor answered a
   vague return request from the general policy); its prompt fix is not
   re-tested yet. The full 3-run scoring has not been done.
-- The agents were moved to LangGraph + LangChain (with LangSmith tracing) after
-  that run, and now use OpenAI's Responses API so reasoning works with tools
-  again (supervisor `low`, orders agent `medium`). The scenarios have not been
-  run on the new code yet.
+- After the move to LangGraph + LangChain (OpenAI Responses API; supervisor
+  reasoning `none` for speed, orders agent `medium`): all 15 scenarios run once
+  passed 14/15; the failing one (lost package) was fixed and passed on re-run.
+  The full 3-run scoring has not been done.
 - One real voice call in Docker.
 
 - [ ] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the

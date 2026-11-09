@@ -8,7 +8,9 @@ llm_model: gpt-5.4-mini
 # GPT-5 models only accept tools together with a reasoning effort through
 # OpenAI's Responses API (checked 2026-11-09), so the agents use it.
 use_responses_api: true
-reasoning_effort: low
+# none: the supervisor used 0 reasoning tokens at low, but each call was slower,
+# and the customer waits for it (2026-11-09 trace).
+reasoning_effort: none
 language: en
 # Limits
 max_tool_calls: 5
