@@ -22,7 +22,9 @@ Still open (2026-11-09):
   (supervisor reasoning `none`, orders agent `low`): **43/45 runs, 14/15
   scenarios passed every run**. Both misses are in `return_too_late`: once the
   reason (30-day window) wasn't said, once the orders agent used `cannot`
-  instead of `done`. Cost of the 45 runs: about $0.20.
+  instead of `done`. Cost of the 45 runs: about $0.20. Fixed in the orders
+  prompt (clear meaning of each status, always say why); `return_too_late` then
+  passed 3/3.
 - Time to the first spoken word: 0.83 s median; 0.82 s for orders questions.
 - One real voice call in Docker.
 
