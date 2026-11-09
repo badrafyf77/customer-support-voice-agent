@@ -3,8 +3,9 @@
 A specialist that answers order questions for the [supervisor](../support).
 It never talks to the customer.
 
-- A LangGraph graph (`model <-> tools`), model `gpt-5.5` with medium reasoning
-  effort, because it works in the background and must follow the rules carefully.
+- A LangGraph graph (`model <-> tools`), model `gpt-5.4-mini` with low reasoning
+  effort: cheap, good with tools, and it works in the background so a little
+  reasoning doesn't make the customer wait.
 - Tools: `list_my_orders`, `get_order`, `track_delivery`, `get_return_policy`.
   They only see the verified customer's orders; the customer comes from code,
   never from the AI.

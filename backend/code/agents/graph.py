@@ -55,10 +55,13 @@ def add_tool_agent(
     max_tool_calls: int,
     tracer: Callable[[], Tracer | None] = lambda: None,
     response_format: Any = None,
+    after_tools: Callable[[dict[str, Any]], str] | None = None,
 ) -> None:
     """Add the ``model`` and ``tools`` nodes, and the edges between them.
 
     ``run_tool(tool_call, state)`` runs one tool call and returns a dict.
+    ``after_tools(state)`` can return ``END`` to stop after the tools instead of
+    calling the model again (default: always back to ``"model"``).
     The caller connects ``START`` (or another node) to ``"model"``.
     """
 
@@ -107,7 +110,10 @@ def add_tool_agent(
     graph.add_node("model", call_model)
     graph.add_node("tools", call_tools)
     graph.add_conditional_edges("model", after_model, ["tools", END])
-    graph.add_edge("tools", "model")
+    if after_tools is None:
+        graph.add_edge("tools", "model")
+    else:
+        graph.add_conditional_edges("tools", after_tools, ["model", END])
 
 
 class TraceHandler(BaseCallbackHandler):

@@ -47,10 +47,10 @@ order…". The customer doesn't hear silence. This looks great in a live demo.
 The old model (Qwen 1.5B) was too small to use tools reliably. We now use the
 OpenAI API:
 
-- `gpt-5.4-mini` (low reasoning effort) for the supervisor, because it must start
+- `gpt-5.4-mini` (no reasoning) for the supervisor, because it must start
   speaking fast.
-- `gpt-5.5` (medium reasoning effort) for the orders agent, because it works in the
-  background and must follow the rules carefully.
+- `gpt-5.4-mini` (low reasoning effort) for the orders agent: cheap, and a little
+  reasoning helps it follow the rules while it works in the background.
 
 The GPU stays in use for speech-to-text, text-to-speech, voice detection and
 turn detection.

@@ -303,3 +303,15 @@ def test_first_token_time_is_traced(make):
     speak(sup.respond("Hi"))
     llm_line = next(line for line in sup.tracer.read() if line["kind"] == "llm_call")
     assert 0 <= llm_line["first_token_ms"] <= llm_line["duration_ms"]
+
+
+def test_check_sentence_and_orders_call_in_one_reply(make):
+    sup = make(
+        [call("ask_orders_agent", text="Let me check that for you.", request="Where is SE-1042?"), say("It arrives Tuesday.")],
+        [call("track_delivery", order_id="SE-1042"), orders_answer("done", "Tuesday", ["SE-1042"])],
+    )
+    verify(sup)
+    assert speak(sup.respond("Where is SE-1042?")) == "Let me check that for you."
+    assert len(sup.model.requests) == 1  # no second model call after "started"
+    assert sup.ready.wait(5)
+    assert speak(sup.respond_to_background()) == "It arrives Tuesday."

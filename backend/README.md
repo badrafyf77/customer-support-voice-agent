@@ -124,7 +124,7 @@ Common variables:
 | Variable | Purpose |
 | --- | --- |
 | `LLM_PROVIDER` | `openai` (default) or `vllm`. Each agent's `config.yaml` can override it. |
-| `LLM_MODEL` | Fallback model name. Each agent sets its own in `config.yaml` (`gpt-5.4-mini`, `gpt-5.5`). |
+| `LLM_MODEL` | Fallback model name. Each agent sets its own in `config.yaml` (both `gpt-5.4-mini` for now). |
 | `VLLM_BASE_URL` | OpenAI-compatible vLLM URL, usually `http://vllm:8000/v1` in Docker. |
 | `OPENAI_API_KEY` | Required for the OpenAI models. |
 | `SHOP_DB_PATH` | Where the ShopEasy database lives. Default `backend/data/shop.db`. |

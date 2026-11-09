@@ -18,18 +18,16 @@ The detailed plan is in [../plans/phase-1-plan.md](../plans/phase-1-plan.md).
 
 Still open (2026-11-09):
 
-- Last real-model run of each scenario: 14 of 15 passed. The
-  `several_orders_needs_info` scenario still failed (the supervisor answered a
-  vague return request from the general policy); its prompt fix is not
-  re-tested yet. The full 3-run scoring has not been done.
-- After the move to LangGraph + LangChain (OpenAI Responses API; supervisor
-  reasoning `none` for speed, orders agent `medium`): all 15 scenarios run once
-  passed 14/15; the failing one (lost package) was fixed and passed on re-run.
-  The full 3-run scoring has not been done.
+- Full scenario score on LangGraph + LangChain, both agents on `gpt-5.4-mini`
+  (supervisor reasoning `none`, orders agent `low`): **43/45 runs, 14/15
+  scenarios passed every run**. Both misses are in `return_too_late`: once the
+  reason (30-day window) wasn't said, once the orders agent used `cannot`
+  instead of `done`. Cost of the 45 runs: about $0.20.
+- Time to the first spoken word: 0.83 s median; 0.82 s for orders questions.
 - One real voice call in Docker.
 
-- [ ] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the
-      supervisor and `gpt-5.5` for the orders agent. The GPU stays for speech,
+- [x] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the
+      supervisor and the orders agent (cheap; `gpt-5.5` was tried first). The GPU stays for speech,
       voice detection and turn detection. See [03-tools.md](./03-tools.md).
 - [x] Build the fake ShopEasy database (customers, orders, deliveries, return
       policy, FAQ, tickets, handoffs). See [README.md](./README.md#the-fake-company).
@@ -46,7 +44,7 @@ Still open (2026-11-09):
       phone number, then confirm their name. See [01-foundations.md](./01-foundations.md).
 - [x] Add the limits: 5 tool calls per answer, 5 per orders job, 15 minutes per call.
 - [x] Save a trace line for every step, one file per call.
-- [ ] Add a text-only test runner and 15 YAML test scenarios that check the
+- [x] Add a text-only test runner and 15 YAML test scenarios that check the
       exact tool and agent calls.
 
 ## Phase 2: Safety and quality

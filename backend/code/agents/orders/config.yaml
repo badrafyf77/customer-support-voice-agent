@@ -1,9 +1,9 @@
-# The orders agent works in the background and must follow the rules
-# carefully, so it uses a stronger model than the supervisor.
+# The orders agent works in the background. gpt-5.4-mini is about 7x cheaper
+# than gpt-5.5 and good with tools; a little reasoning helps it follow the rules.
 llm_provider: openai
-llm_model: gpt-5.5
+llm_model: gpt-5.4-mini
 # GPT-5 models only accept tools together with a reasoning effort through
 # OpenAI's Responses API (checked 2026-11-09), so the agents use it.
 use_responses_api: true
-reasoning_effort: medium
+reasoning_effort: low
 max_tool_calls: 5

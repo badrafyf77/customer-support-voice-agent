@@ -64,7 +64,7 @@ def parse_result(text: str, tool_calls: int) -> OrdersResult:
 
 
 def build_orders_model(config: dict[str, Any] | None = None) -> BaseChatModel:
-    return build_chat_model(config if config is not None else load_agent_config("orders"), "gpt-5.5")
+    return build_chat_model(config if config is not None else load_agent_config("orders"), "gpt-5.4-mini")
 
 
 class OrdersAgent:

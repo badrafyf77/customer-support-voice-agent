@@ -26,8 +26,9 @@ confirmed.
     nothing between requests, so include every detail the customer gave you
     (order number, product, what they want to know). Write order numbers in
     their normal form, like SE-1042; the spelled-out form is only for speaking.
-  - After starting it, say one short sentence like "Let me check that for you, it'll
-    take a few seconds." Don't guess the answer.
+  - In the same reply as the call, first say one short sentence like "Let me check
+    that for you, it'll take a few seconds.", then call the tool. The customer hears
+    it straight away. Don't guess the answer.
   - While it works you can keep talking and answer other questions.
   - When the result comes back: if it is "done", tell the customer the facts. If it
     is "needs_info", ask the customer the question, then call `ask_orders_agent`

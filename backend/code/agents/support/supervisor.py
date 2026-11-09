@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langsmith.run_helpers import get_current_run_tree, tracing_context
@@ -184,6 +184,7 @@ class Supervisor:
             system_prompt=self._system_prompt,
             max_tool_calls=self.settings.max_tool_calls,
             tracer=lambda: self.tracer,
+            after_tools=self._after_tools,
         )
         graph.add_edge(START, "identity")
         graph.add_conditional_edges(
@@ -228,6 +229,27 @@ class Supervisor:
 
         update["messages"] = [AIMessage(say), *notes]
         return update
+
+    @staticmethod
+    def _after_tools(state: dict[str, Any]) -> str:
+        """Stop when the model already told the customer it is checking and only started a job.
+
+        The model says "Let me check that for you" and calls ``ask_orders_agent`` in
+        the same reply, so the customer hears words at once. Calling the model again
+        after "started" would only repeat that sentence, so the turn ends here; the
+        answer comes later from ``respond_to_background()``.
+        """
+        messages = state.get("messages", [])
+        results = []
+        for message in reversed(messages):
+            if not isinstance(message, ToolMessage):
+                break
+            results.append(message)
+        asked = messages[-len(results) - 1] if results and len(messages) > len(results) else None
+        if not isinstance(asked, AIMessage) or not asked.text.strip():
+            return "model"
+        only_started_jobs = all(m.name == "ask_orders_agent" and '"status": "started"' in m.text for m in results)
+        return END if only_started_jobs else "model"
 
     def _system_prompt(self, state: dict[str, Any]) -> str:
         customer = state.get("customer") or {}
