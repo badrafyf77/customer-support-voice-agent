@@ -58,6 +58,11 @@ def _matches(expected: dict[str, Any], call: dict[str, Any]) -> bool:
     return True
 
 
+def _plain(text: str) -> str:
+    """Lower case, with curly quotes made straight ("can’t" == "can't")."""
+    return text.lower().replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+
+
 def check_turn(turn: dict[str, Any], run, today: date) -> list[str]:
     """Return a list of problems (empty when the turn passed)."""
     problems: list[str] = []
@@ -83,11 +88,11 @@ def check_turn(turn: dict[str, Any], run, today: date) -> list[str]:
         if status != turn["orders_result"]:
             problems.append(f"orders_result should be {turn['orders_result']}, got {status}")
 
-    heard = run.all_spoken.lower()
+    heard = _plain(run.all_spoken)
     for item in turn.get("answer_contains") or []:
         options = item if isinstance(item, list) else [item]
         options = [fill_dates(str(option), today) for option in options]
-        if not any(option.lower() in heard for option in options):
+        if not any(_plain(option) in heard for option in options):
             problems.append(f"answer should contain {' or '.join(repr(o) for o in options)}; heard {run.all_spoken!r}")
 
     if "expect_finished" in turn and bool(turn["expect_finished"]) != run.finished:

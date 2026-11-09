@@ -2,5 +2,7 @@
 # carefully, so it uses a stronger model than the supervisor.
 llm_provider: openai
 llm_model: gpt-5.5
-reasoning_effort: medium
+# The Chat Completions API only accepts tools with reasoning_effort "none"
+# (checked 2026-11-09). Thinking with tools would need the Responses API.
+reasoning_effort: none
 max_tool_calls: 5

@@ -118,10 +118,11 @@ ORDERS = [
      [("Reading glasses", "accessories", 1, 25.00, 1)],
      ("out_for_delivery", -1, 0, 0, None, "With the driver in Oxford")),
 
-    # C010 Noah: many orders of every kind.
-    ("SE-1131", "C010", -63, "Visa ending 8890",
+    # C010 Noah: many orders of every kind, two of them still returnable
+    # (so "I want to return something" really needs a follow-up question).
+    ("SE-1131", "C010", -15, "Visa ending 8890",
      [("Bike helmet", "sports", 1, 45.00, 1)],
-     ("delivered", -62, -60, -60, -60, "Delivered to front door")),
+     ("delivered", -14, -12, -12, -12, "Delivered to front door")),
     ("SE-1132", "C010", -3, "Visa ending 8890",
      [("Bike lights", "sports", 1, 19.99, 1)],
      ("in_transit", -2, 2, 2, None, "Liverpool sorting centre")),

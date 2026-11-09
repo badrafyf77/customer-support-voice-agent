@@ -8,4 +8,4 @@ turns:
       - orders: get_order
         args: {order_id: "1053"}
     orders_result: done
-    answer_contains: [["30 days", "thirty days", "30-day", "thirty-day"]]
+    answer_contains: [["30 days", "thirty days", "30-day", "thirty-day", "30 day", "thirty day"]]

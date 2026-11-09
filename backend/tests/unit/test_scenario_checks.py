@@ -90,3 +90,9 @@ def test_every_scenario_file_is_valid():
             assert set(turn) <= allowed, (scenario["name"], set(turn) - allowed)
             for expected in turn.get("expect_calls") or []:
                 assert ("supervisor" in expected) != ("orders" in expected)
+
+
+def test_curly_apostrophes_match(tmp_path):
+    run = fake_track_conversation(tmp_path).turns[2]
+    run.background = ["Sorry, that item can’t be returned."]
+    assert check_turn({"answer_contains": ["can't"]}, run, TODAY) == []

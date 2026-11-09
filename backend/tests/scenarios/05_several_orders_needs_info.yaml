@@ -1,17 +1,21 @@
 name: several_orders_needs_info
-description: Omar has two parcels on the way and doesn't say which one, so the orders agent asks.
-phone: "07700 900 106"
+description: >
+  Noah wants to return "something". Two of his orders can still be returned
+  (bike helmet, cycling gloves), so the orders agent asks which one. (For a simple "where is my parcel?" the agent may answer for every
+  parcel at once, which is fine, so that case is not used here.)
+phone: "07700 900 110"
 turns:
-  - say: "Hi, where is my parcel?"
+  - say: "Hi, I want to return something I bought."
     expect_calls:
       - supervisor: ask_orders_agent
       - orders: list_my_orders
     orders_result: needs_info
     must_not_call: [transfer_to_human, create_ticket]
-    answer_contains: [["grinder", "organiser", "organizer"]]
-  - say: "The desk organiser."
+    answer_contains: ["helmet", "gloves"]
+  - say: "The cycling gloves."
     expect_calls:
       - supervisor: ask_orders_agent
-      - orders: [track_delivery, get_order, list_my_orders]
+      - orders: get_order
+        args: {order_id: "1134"}
     orders_result: done
-    answer_contains: [["{day+3}", "{date+3}"]]
+    answer_contains: [["{date+23}", "{day+23}"]]

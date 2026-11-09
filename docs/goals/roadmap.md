@@ -16,8 +16,16 @@ Tick a box (`[x]`) when a task is done.
 
 The detailed plan is in [../plans/phase-1-plan.md](../plans/phase-1-plan.md).
 
-Still open: the two unticked items below need a run with a valid OpenAI key
-(`pytest -m llm`), and one real voice call in Docker.
+Still open (2026-11-09):
+
+- Last real-model run of each scenario: 14 of 15 passed. The
+  `several_orders_needs_info` scenario still failed (the supervisor answered a
+  vague return request from the general policy); its prompt fix is not
+  re-tested yet. The full 3-run scoring has not been done.
+- Reasoning effort is `none` for both agents: Chat Completions doesn't accept
+  tools with any other value. Thinking together with tools would need the
+  Responses API.
+- One real voice call in Docker.
 
 - [ ] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the
       supervisor and `gpt-5.5` for the orders agent. The GPU stays for speech,
