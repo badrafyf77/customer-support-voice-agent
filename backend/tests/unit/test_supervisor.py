@@ -295,3 +295,11 @@ def test_every_customer_turn_and_answer_is_traced(make):
     assert [line["output"] for line in lines if line["kind"] == "spoken"][-1] == "Hello!"
     assert lines[0]["kind"] == "call_start" and lines[-1]["kind"] == "call_end"
     assert lines[-1]["output"]["customer_id"] == "C001"
+
+
+def test_first_token_time_is_traced(make):
+    sup = make([say("Hello ", "there!")])
+    verify(sup)
+    speak(sup.respond("Hi"))
+    llm_line = next(line for line in sup.tracer.read() if line["kind"] == "llm_call")
+    assert 0 <= llm_line["first_token_ms"] <= llm_line["duration_ms"]

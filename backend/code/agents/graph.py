@@ -133,13 +133,24 @@ class TraceHandler(BaseCallbackHandler):
             "model": params.get("model") or params.get("model_name") or (metadata or {}).get("ls_model_name"),
             "messages": len(messages[0]) if messages else 0,
             "tool_choice": params.get("tool_choice"),
+            "first_token": None,
         }
+
+    def on_llm_new_token(self, token: str, *, run_id: UUID, chunk=None, **kwargs: Any) -> None:
+        """Remember when the first text or tool-call piece arrived (time to first token)."""
+        started = self._started.get(run_id)
+        if started is None or started["first_token"] is not None:
+            return
+        message = getattr(chunk, "message", None)
+        if token or getattr(message, "tool_call_chunks", None):
+            started["first_token"] = time.perf_counter()
 
     def on_llm_end(self, response, *, run_id: UUID, **kwargs: Any) -> None:
         started = self._started.pop(run_id, None)
         if started is None:
             return
         message = response.generations[0][0].message
+        first_token = started["first_token"]
         self.tracer.event(
             "llm_call",
             self.agent,
@@ -152,6 +163,8 @@ class TraceHandler(BaseCallbackHandler):
             duration_ms=(time.perf_counter() - started["time"]) * 1000,
             parent_id=self.parent_id,
             usage=getattr(message, "usage_metadata", None) or {},
+            # Time to first token; None when the model didn't stream (e.g. a plain invoke).
+            first_token_ms=None if first_token is None else round((first_token - started["time"]) * 1000, 1),
         )
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
