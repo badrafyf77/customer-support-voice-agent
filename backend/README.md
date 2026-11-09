@@ -31,9 +31,11 @@ code/
 ├── config/global.yaml           # shared defaults
 ├── agents/
 │   ├── base.py                  # BaseAgent.run_turn(...) contract
-│   ├── tool_loop.py             # shared model -> tools -> model loop
-│   ├── support/                 # supervisor: talks to the customer
-│   └── orders/                  # orders specialist (background)
+│   ├── graph.py                 # shared LangGraph model <-> tools nodes
+│   ├── models.py                # LangChain ChatOpenAI from config.yaml
+│   ├── support/                 # supervisor graph: identity -> model <-> tools
+│   └── orders/                  # orders specialist graph (background)
+├── studio.py                    # the graphs for LangGraph Studio
 ├── shop/                        # fake ShopEasy database and its tools
 ├── core/
 │   ├── session.py               # WebSocket session lifecycle
@@ -189,21 +191,68 @@ python -m shop.seed
 Test phone numbers: Sara Benali `07700900101` (one order), James Carter
 `07700900102` (three orders); see `code/shop/seed.py` for the rest.
 
+## Debugging with LangSmith and LangGraph Studio
+
+The agents are LangGraph graphs, so two LangChain tools can show what they do.
+
+**LangSmith** shows every run as a tree: each model call (prompt, answer, tokens,
+time), each tool call with its input and output, and the orders agent's run
+under the supervisor's `ask_orders_agent` call. All runs of one phone call are
+grouped as one thread (by `session_id`). LangSmith is a website; it can't run on
+your computer (self-hosting is only for paid Enterprise plans).
+
+1. Create a free account at <https://smith.langchain.com> (the Developer plan
+   includes about 5,000 traces a month).
+2. Settings -> API Keys -> create a key.
+3. In `backend/.env`:
+
+   ```bash
+   LANGSMITH_TRACING=true
+   LANGSMITH_API_KEY=lsv2_...
+   LANGSMITH_PROJECT=shopeasy-voice-agent
+   ```
+
+Now every scenario test, Studio run and voice call shows up in that project.
+The free unit tests never send anything to LangSmith.
+
+**LangGraph Studio** lets you chat with a graph yourself and watch it move from
+node to node:
+
+```bash
+cd backend
+.venv/bin/langgraph dev
+```
+
+It opens <https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024>.
+The graphs run on your computer; the page is only the screen. Pick
+`support_agent`, then send one message per run on the same thread: the phone
+number (`07700900101`), then `yes`, then your question. In Studio the orders
+agent runs inside the `ask_orders_agent` tool call, so the whole run is in one
+place. `orders_agent` can also be tried alone: give it `customer_id` (e.g.
+`C002`) and a message. Each message calls the real OpenAI models, so it costs a
+little, like a scenario run.
+
 ## Traces
 
 Every call writes `logs/traces/<session_id>.jsonl`, one JSON line per step:
 what the customer said, identity steps, every model call (with token counts),
 every tool call, calls to the orders agent and their results, fillers, limits
-reached, and what was spoken. `parent_id` links the lines into a tree.
+reached, and what was spoken. `parent_id` links the lines into a tree. This file
+stays on your computer and is what the scenario tests check; LangSmith is the
+place to look at runs by eye.
 
 ## Tests
 
+The tests only need the agent packages, not the speech ones, so they run in a
+small virtual environment (a separate folder of Python packages):
+
 ```bash
 cd backend
-pip install -r requirements-dev.txt
-pytest                         # unit tests: no AI, free, about 2 seconds
-pytest -m llm                  # 15 scenarios x 3 runs with the real models (costs a little)
-SCENARIO_RUNS=1 pytest -m llm -k track_single_order   # one scenario, once
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest               # unit tests: fake models, free, about 2 seconds
+SCENARIO_RUNS=1 .venv/bin/pytest -m llm -k track_single_order   # one real scenario, once
+.venv/bin/pytest -m llm        # all 15 scenarios x 3 runs with the real models (costs money)
 ```
 
 The scenarios are YAML files in `tests/scenarios/`. Each customer turn lists the

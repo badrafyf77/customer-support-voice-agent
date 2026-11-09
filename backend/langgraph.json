@@ -1,0 +1,8 @@
+{
+  "dependencies": ["./code"],
+  "graphs": {
+    "support_agent": "./code/studio.py:support_graph",
+    "orders_agent": "./code/studio.py:orders_graph"
+  },
+  "env": ".env"
+}

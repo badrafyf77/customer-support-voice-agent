@@ -97,6 +97,26 @@ class IdentityCheck:
         # The supervisor answers it once the identity is verified.
         self.early_requests: list[str] = []
 
+    STATE_FIELDS = ("stage", "phone_attempts", "confirm_attempts", "candidate", "customer", "early_requests")
+
+    def to_state(self) -> dict[str, Any]:
+        """Plain data, so it can live in the LangGraph state."""
+        return {name: getattr(self, name) for name in self.STATE_FIELDS}
+
+    @classmethod
+    def from_state(
+        cls,
+        state: dict[str, Any] | None,
+        lookup: Callable[[str], dict[str, Any]],
+        tracer: Tracer | None = None,
+        max_attempts: int = 3,
+    ) -> "IdentityCheck":
+        check = cls(lookup, tracer, max_attempts)
+        for name, value in (state or {}).items():
+            if name in cls.STATE_FIELDS:
+                setattr(check, name, list(value) if name == "early_requests" else value)
+        return check
+
     @property
     def done(self) -> bool:
         return self.stage in {VERIFIED, FAILED}

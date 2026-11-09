@@ -2,6 +2,10 @@
 
 Status: **approved and built** on the `phase-1` branch. Still to check: the scenarios with the real models, and one voice call.
 
+Change after the build: the agents now run on LangGraph + LangChain, traced in
+LangSmith, instead of the hand-written tool loop described in Steps 6, 8 and 9.
+The behaviour, limits, trace file and tests stay the same; see `agents/graph.py`.
+
 This plan comes from the design questions we went through together. Section 1
 lists every decision, so nothing is hidden. Section 3 is the work, in order.
 

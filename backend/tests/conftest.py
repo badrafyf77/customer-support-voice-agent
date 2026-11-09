@@ -1,3 +1,12 @@
+import os
+
+
+def pytest_configure(config):
+    """Keep the free unit tests out of LangSmith. Scenario runs (-m llm) use your .env setting."""
+    if "llm" not in (config.option.markexpr or "") or "not llm" in (config.option.markexpr or ""):
+        os.environ["LANGSMITH_TRACING"] = "false"
+
+
 def pytest_terminal_summary(terminalreporter):
     """Print a pass-rate table after the scenario tests."""
     try:

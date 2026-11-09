@@ -5,9 +5,10 @@ tts_engine: kokoro
 # The supervisor talks to the customer, so it uses a fast model.
 llm_provider: openai
 llm_model: gpt-5.4-mini
-# The Chat Completions API only accepts tools with reasoning_effort "none"
-# (checked 2026-11-09). Thinking with tools would need the Responses API.
-reasoning_effort: none
+# GPT-5 models only accept tools together with a reasoning effort through
+# OpenAI's Responses API (checked 2026-11-09), so the agents use it.
+use_responses_api: true
+reasoning_effort: low
 language: en
 # Limits
 max_tool_calls: 5

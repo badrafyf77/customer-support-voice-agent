@@ -8,8 +8,13 @@ The ShopEasy supervisor. It is the only agent that talks to the customer.
    turn the spoken words into digits, find the customer, then ask "Am I speaking
    with <name>?". Three tries per stage, then a transfer to a human. The AI does
    nothing before this.
-2. **Supervisor AI** (`supervisor.py`, model `gpt-5.4-mini`): answers with its
-   tools, at most 5 tool calls per answer.
+2. **Supervisor AI** (`supervisor.py`, model `gpt-5.4-mini`, low reasoning
+   effort): answers with its tools, at most 5 tool calls per answer.
+
+The supervisor is a LangGraph graph: `identity -> model <-> tools`. The
+`identity` node is the plain-code step above, so the AI can only be reached once
+the customer is verified. You can watch it in LangGraph Studio (see the backend
+README).
    - `search_faq`, `get_return_policy`, `create_ticket`, `transfer_to_human`
      run right away (they take milliseconds).
    - `ask_orders_agent` starts the [orders agent](../orders) in a background
@@ -24,7 +29,7 @@ The ShopEasy supervisor. It is the only agent that talks to the customer.
 | File | Purpose |
 | --- | --- |
 | `agent.py` | `SupportAgent`: plugs the supervisor into the voice runtime. |
-| `supervisor.py` | The supervisor: identity first, then the tool loop and background jobs. Knows nothing about audio. |
+| `supervisor.py` | The supervisor graph and the background jobs. Knows nothing about audio. |
 | `identity.py` | Steps 1 and 2 in plain code. |
 | `prompt.md` | The supervisor's instructions. |
 | `config.yaml` | Model, reasoning effort, limits, speech settings. |

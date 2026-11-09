@@ -2,7 +2,7 @@
 import json
 from datetime import date
 
-from fakes import FakeLLM, call, say
+from fakes import FakeChatModel, call, say
 from scenario_checks import check_turn, fill_dates
 from test_scenarios import customer_lines, load_scenarios
 from text_runner import run_conversation
@@ -15,17 +15,17 @@ def orders_answer(status, message, order_ids=()):
 
 
 def fake_track_conversation(tmp_path):
-    llm = FakeLLM([
+    model = FakeChatModel(replies=[
         call("ask_orders_agent", request="Where is order SE-1042?"),
         say("Let me check that for you."),
         say("Your headphones arrive on Tuesday 10 November."),
     ])
-    orders_llm = FakeLLM([
+    orders_model = FakeChatModel(replies=[
         call("track_delivery", order_id="SE-1042"),
         orders_answer("done", "SE-1042 arrives Tuesday 10 November.", ["SE-1042"]),
     ])
     lines = ["07700900101", "yes", "Where is my order SE-1042?"]
-    return run_conversation(lines, "check-test", trace_dir=tmp_path, today=TODAY, llm=llm, orders_llm=orders_llm)
+    return run_conversation(lines, "check-test", trace_dir=tmp_path, today=TODAY, model=model, orders_model=orders_model)
 
 
 TRACK_TURN = {

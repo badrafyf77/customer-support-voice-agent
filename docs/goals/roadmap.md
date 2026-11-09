@@ -22,9 +22,10 @@ Still open (2026-11-09):
   `several_orders_needs_info` scenario still failed (the supervisor answered a
   vague return request from the general policy); its prompt fix is not
   re-tested yet. The full 3-run scoring has not been done.
-- Reasoning effort is `none` for both agents: Chat Completions doesn't accept
-  tools with any other value. Thinking together with tools would need the
-  Responses API.
+- The agents were moved to LangGraph + LangChain (with LangSmith tracing) after
+  that run, and now use OpenAI's Responses API so reasoning works with tools
+  again (supervisor `low`, orders agent `medium`). The scenarios have not been
+  run on the new code yet.
 - One real voice call in Docker.
 
 - [ ] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the

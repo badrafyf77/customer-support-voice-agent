@@ -48,17 +48,17 @@ def run_conversation(
     trace_dir: Path | None = None,
     today: date | None = None,
     job_timeout: float = 60.0,
-    llm: Any = None,
-    orders_llm: Any = None,
+    model: Any = None,
+    orders_model: Any = None,
 ) -> ConversationRun:
     """Play ``lines`` as the customer, on a fresh copy of the ShopEasy database.
 
-    Pass ``llm`` and ``orders_llm`` to use fake models instead of the configured ones.
+    Pass ``model`` and ``orders_model`` to use fake models instead of the configured ones.
     """
     db = ShopDB(build_database(Path(tempfile.mkdtemp()) / "shop.db", today=today))
     tracer = Tracer(session_id, trace_dir or default_trace_dir() / "scenarios")
-    if llm is not None:
-        supervisor = Supervisor(llm, orders_llm, db, tracer, session_id, SupervisorSettings(slow_tool_seconds=0), today=today)
+    if model is not None:
+        supervisor = Supervisor(model, orders_model, db, tracer, session_id, SupervisorSettings(), today=today)
     else:
         supervisor = build_supervisor(
             session_id,

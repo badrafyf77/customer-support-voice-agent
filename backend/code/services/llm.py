@@ -3,9 +3,8 @@ import os
 import sys
 import time
 import uuid
-from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, Generator, List, Optional
 
 try:
     from openai import OpenAI, APIError, APITimeoutError, RateLimitError, APIConnectionError
@@ -90,39 +89,6 @@ def build_request_kwargs(
     if "presence_penalty" not in request_kwargs:
         request_kwargs["presence_penalty"] = 0.1
     return request_kwargs
-
-
-@dataclass(frozen=True)
-class TextDelta:
-    """A piece of the answer text."""
-
-    text: str
-
-
-@dataclass(frozen=True)
-class ToolCall:
-    id: str
-    name: str
-    arguments: str  # JSON text, as the model wrote it
-
-    def as_message(self) -> Dict[str, Any]:
-        return {"id": self.id, "type": "function", "function": {"name": self.name, "arguments": self.arguments}}
-
-
-@dataclass(frozen=True)
-class ToolCalls:
-    """The model wants these tools to run before it continues."""
-
-    calls: List[ToolCall]
-
-
-@dataclass(frozen=True)
-class StreamEnd:
-    finish_reason: Optional[str] = None
-    usage: Dict[str, Any] = field(default_factory=dict)
-
-
-ChatEvent = Union[TextDelta, ToolCalls, StreamEnd]
 
 
 def _create_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
@@ -356,90 +322,6 @@ class LLM:
             with self._requests_lock:
                 if req_id in self._active_requests:
                     self._cancel_single_request_unsafe(req_id)
-
-    def stream_chat(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        request_id: Optional[str] = None,
-        **kwargs: Any,
-    ) -> Generator[ChatEvent, None, None]:
-        """Stream one model reply that may ask for tools.
-
-        Yields ``TextDelta`` events while the answer is written, then one
-        ``ToolCalls`` event if the model asked for tools, then ``StreamEnd``.
-        The caller gives the full message list, including the system prompt.
-        """
-        if not self._lazy_initialize_clients():
-            raise RuntimeError(f"LLM backend '{self.backend}' client failed to initialize.")
-
-        req_id = request_id if request_id else f"{self.backend}-chat-{uuid.uuid4()}"
-        request_kwargs = build_request_kwargs(self.backend, self.model, self.reasoning_effort, **kwargs)
-        if tools:
-            request_kwargs["tools"] = tools
-
-        stream = None
-        partial_calls: Dict[int, Dict[str, str]] = {}
-        finish_reason: Optional[str] = None
-        usage: Dict[str, Any] = {}
-        cancelled = False
-        try:
-            assert self.client is not None
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": True},
-                **request_kwargs,
-            )
-            self._register_request(req_id, self.backend, stream)
-            for chunk in stream:
-                with self._requests_lock:
-                    if req_id not in self._active_requests:
-                        cancelled = True
-                        break
-                if getattr(chunk, "usage", None):
-                    usage = chunk.usage.model_dump() if hasattr(chunk.usage, "model_dump") else dict(chunk.usage)
-                if not getattr(chunk, "choices", None):
-                    continue
-                choice = chunk.choices[0]
-                finish_reason = choice.finish_reason or finish_reason
-                delta = choice.delta
-                if getattr(delta, "content", None):
-                    yield TextDelta(delta.content)
-                for piece in getattr(delta, "tool_calls", None) or []:
-                    slot = partial_calls.setdefault(piece.index, {"id": "", "name": "", "arguments": ""})
-                    if piece.id:
-                        slot["id"] = piece.id
-                    if piece.function is not None:
-                        slot["name"] += piece.function.name or ""
-                        slot["arguments"] += piece.function.arguments or ""
-        except (APIConnectionError, APITimeoutError, TimeoutError) as exc:
-            with self._requests_lock:
-                was_cancelled = req_id not in self._active_requests
-            if was_cancelled:
-                return
-            raise ConnectionError(f"Communication error during generation: {exc}") from exc
-        finally:
-            with self._requests_lock:
-                if req_id in self._active_requests:
-                    self._cancel_single_request_unsafe(req_id)
-            if stream is not None and hasattr(stream, "close"):
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-
-        if cancelled:
-            return
-        if partial_calls:
-            yield ToolCalls(
-                [
-                    ToolCall(slot["id"] or f"call_{index}", slot["name"], slot["arguments"] or "{}")
-                    for index, slot in sorted(partial_calls.items())
-                ]
-            )
-        yield StreamEnd(finish_reason=finish_reason, usage=usage)
 
     def prewarm(self, max_retries: int = 1) -> bool:
         if not self._lazy_initialize_clients():

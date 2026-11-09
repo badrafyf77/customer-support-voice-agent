@@ -13,6 +13,7 @@ Type key:
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
 | `server.py` | FastAPI entrypoint for HTTP endpoints and `/ws` sessions. | Uvicorn, Docker command, local `python server.py`. | `agents.support.agent`, `core.config`, `core.logsetup`, `core.session`, FastAPI. | Core | Owns HTTP routing only; session lifecycle belongs in `core/session.py`. |
+| `studio.py` | Exposes the two agent graphs to LangGraph Studio (`langgraph dev`, configured in `../langgraph.json`). | `langgraph dev`. | `agents.support.supervisor`. | Optional | Debugging only. |
 | `system_prompt.txt` | Fallback generic system prompt for the speech pipeline. | Read by `core/pipeline.py` when an agent does not provide a prompt. | None. | Optional | Agent prompts win when an agent provides one. |
 
 ## Agents
@@ -20,12 +21,13 @@ Type key:
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
 | `agents/base.py` | Defines the `BaseAgent` contract: `run_turn(...)` plus default `idle_turn(...)`, `close_session(...)`, `finish_session(...)` / `save_progress(...)` hooks. | `agents/support/agent.py`, `agents/__init__.py`, `core/session.py`. | `core.models`. | Core | No overlap; this is the only agent contract. |
-| `agents/tool_loop.py` | Shared model -> tools -> model loop with the tool-call limit, slow-tool filler and tracing. | `agents/support/supervisor.py`, `agents/orders/agent.py`. | `services.llm`, `core.trace`. | Core | The only place that runs tool calls for an agent. |
+| `agents/graph.py` | Shared LangGraph nodes: `model` <-> `tools` with the tool-call limit, plus `TraceHandler` (model calls into our trace file). | `agents/support/supervisor.py`, `agents/orders/agent.py`. | LangGraph, LangChain, `core.trace`. | Core | The only place that runs tool calls for an agent. |
+| `agents/models.py` | Builds the LangChain `ChatOpenAI` of an agent from its config (Responses API, reasoning effort). | Both agents. | `langchain_openai`. | Support | `services/llm.py` is only used by the speech pipeline now. |
 | `agents/support/agent.py` | `SupportAgent`: returns each turn as a text stream for the pipeline; gives background results and ends the call from `idle_turn`. | `server.py`. | `agents.support.supervisor`, `core.models`. | Core | Thin adapter; behaviour lives in `supervisor.py`. |
-| `agents/support/supervisor.py` | The supervisor: identity steps first, then the tool loop, background orders jobs, call limits. No audio. | `agents/support/agent.py`, `tests/text_runner.py`. | `agents.support.identity`, `agents.orders.agent`, `agents.tool_loop`, `shop.tools`, `core.trace`. | Core | The single "agent brain" used by voice and text tests. |
+| `agents/support/supervisor.py` | The supervisor LangGraph graph (`identity -> model <-> tools`), background orders jobs, call limits. No audio. | `agents/support/agent.py`, `tests/text_runner.py`. | `agents.support.identity`, `agents.orders.agent`, `agents.tool_loop`, `shop.tools`, `core.trace`. | Core | The single "agent brain" used by voice and text tests. |
 | `agents/support/identity.py` | Steps 1 and 2 in plain code: phone number lookup and name confirmation. | `agents/support/supervisor.py`. | `core.trace`. | Core | No AI here, on purpose. |
 | `agents/support/prompt.md`, `config.yaml` | Supervisor instructions; model, limits and speech settings. | `supervisor.py`; `load_agent_config("support")`. | `config/global.yaml`. | Support | Overrides `config/global.yaml`. |
-| `agents/orders/agent.py` | Orders specialist: runs a job in the background and returns `done` / `needs_info` / `cannot`. | `agents/support/supervisor.py`. | `agents.tool_loop`, `shop.tools`, `services.llm`. | Core | Never talks to the customer. |
+| `agents/orders/agent.py` | Orders specialist LangGraph graph: runs a job and returns `done` / `needs_info` / `cannot` (structured output). | `agents/support/supervisor.py`. | `agents.graph`, `agents.models`, `shop.tools`. | Core | Never talks to the customer. |
 | `agents/orders/prompt.md`, `config.yaml` | Orders agent instructions; model and tool-call limit. | `agents/orders/agent.py`; `load_agent_config("orders")`. | `config/global.yaml`. | Support | Overrides `config/global.yaml`. |
 
 ## Shop
@@ -66,7 +68,7 @@ Type key:
 
 | File | Role | Imported / Called By | Depends On | Type | Possible Overlap |
 | --- | --- | --- | --- | --- | --- |
-| `services/llm.py` | Provider wrapper for vLLM/OpenAI-compatible streaming generation, including `stream_chat(...)` with tool calls and GPT-5 reasoning settings. | `core/pipeline.py`, `agents/tool_loop.py`. | OpenAI client, env vars, stdlib threading/time/uuid. | Core | No overlap; LLM API access stays here while orchestration stays in the agents and `core/pipeline.py`. |
+| `services/llm.py` | Provider wrapper for vLLM/OpenAI-compatible streaming generation, used by the speech pipeline (prewarm, latency check, plain `generate` turns). | `core/pipeline.py`. | OpenAI client, env vars, stdlib threading/time/uuid. | Core | No overlap; LLM API access stays here while orchestration stays in the agents and `core/pipeline.py`. |
 
 ## Main Runtime Flow
 

@@ -8,7 +8,7 @@ from agents.support.agent import SupportAgent
 from agents.support.supervisor import Supervisor, SupervisorSettings
 from core.models import AgentResult, SessionContext
 from core.trace import Tracer
-from fakes import FakeLLM, call, say
+from fakes import FakeChatModel, call, say
 from shop.db import ShopDB
 from shop.seed import build_database
 
@@ -31,13 +31,13 @@ def spoken(result: AgentResult) -> str:
 @pytest.fixture
 def agent(tmp_path):
     db = ShopDB(build_database(tmp_path / "shop.db", today=TODAY))
-    supervisor_llm = FakeLLM()
-    orders_llm = FakeLLM()
+    supervisor_llm = FakeChatModel()
+    orders_llm = FakeChatModel()
 
     def factory(session_id):
         return Supervisor(
             supervisor_llm, orders_llm, db, Tracer(session_id, tmp_path), session_id,
-            SupervisorSettings(slow_tool_seconds=0), today=TODAY,
+            SupervisorSettings(), today=TODAY,
         )
 
     support = SupportAgent(config={}, orders_config={}, supervisor_factory=factory)

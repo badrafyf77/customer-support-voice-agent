@@ -1,3 +1,13 @@
-# Test tools. Install with: pip install -r requirements.txt -r requirements-dev.txt
-pytest
+# Tools for tests and debugging. The unit tests and LangGraph Studio only need the
+# agent packages, not the speech packages from requirements.txt, so on a laptop:
+#   python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+openai
+python-dotenv
 pyyaml
+langchain>=1.4
+langchain-openai>=1.7
+langgraph>=1.2
+langsmith>=0.14
+pytest
+# `langgraph dev` (LangGraph Studio). Needs Python 3.11 or newer.
+langgraph-cli[inmem]

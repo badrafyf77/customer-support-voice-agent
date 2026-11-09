@@ -39,7 +39,10 @@ to let the pipeline's own LLM answer, `AgentResult.ignore()` to stay silent, or
 | `support` | [`support`](./support) | ShopEasy supervisor. Talks to the customer. |
 | `orders` | [`orders`](./orders) | Orders specialist, called by the supervisor in the background. |
 
-`tool_loop.py` is the model -> tools -> model loop that both agents share.
+Both agents are LangGraph graphs. `graph.py` holds the shared `model <-> tools`
+nodes (with the tool-call limit) and the handler that writes model calls to our
+trace file; `models.py` builds the LangChain `ChatOpenAI` model from an agent's
+`config.yaml`. `../studio.py` exposes the graphs to LangGraph Studio.
 
 ## Adding Or Changing Agents
 

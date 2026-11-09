@@ -30,6 +30,9 @@ class ToolContext:
     customer_id: str | None = None
     tracer: Tracer | None = None
     today: date = field(default_factory=date.today)
+    # The trace line that tool calls hang under (for example the orders agent's
+    # agent_call). Given explicitly because LangGraph may run tools on other threads.
+    trace_parent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,7 @@ def run_tool(tool: Tool, ctx: ToolContext, args: dict[str, Any] | str | None, ag
     if not isinstance(args, dict):
         result: dict[str, Any] = {"error": "The tool arguments were not valid JSON."}
         if ctx.tracer:
-            ctx.tracer.event("tool_call", agent, model_or_tool=tool.name, output=result)
+            ctx.tracer.event("tool_call", agent, model_or_tool=tool.name, output=result, parent_id=ctx.trace_parent)
         return result
 
     allowed = tool.parameters.get("properties", {})
@@ -83,7 +86,7 @@ def run_tool(tool: Tool, ctx: ToolContext, args: dict[str, Any] | str | None, ag
 
     if not ctx.tracer:
         return call()
-    with ctx.tracer.span("tool_call", agent, input=clean_args, model_or_tool=tool.name) as span:
+    with ctx.tracer.span("tool_call", agent, input=clean_args, model_or_tool=tool.name, parent_id=ctx.trace_parent) as span:
         result = call()
         span.output = result
     return result
