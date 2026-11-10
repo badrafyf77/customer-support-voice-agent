@@ -7,6 +7,11 @@ echo "Entrypoint: Ensuring cache directory ownership for user appuser (1001)..."
 # Ensure the target directories exist. Runs as root, so has permission.
 mkdir -p /home/appuser/.cache/huggingface /home/appuser/.cache/torch
 
+# The trace files and the ShopEasy database live in folders mounted from the host,
+# which Docker creates as root. Let appuser write there.
+mkdir -p /app/logs /app/data
+chown -R 1001:1001 /app/logs /app/data
+
 # Chown command runs as root and should succeed now.
 # Uses UID:GID which is robust. Targets the parent .cache dir recursively.
 chown -R 1001:1001 /home/appuser/.cache

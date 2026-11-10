@@ -16,6 +16,13 @@ services:
       - LLM_PROVIDER=openai
       - LLM_MODEL=${LLM_MODEL:-gpt-5.4-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - VOICE_AGENT=${VOICE_AGENT:-support}
+
+      # --- LangSmith (optional): traces of every agent run ---
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-shopeasy-voice-agent}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
 
       # --- Other App Environment Variables ---
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
