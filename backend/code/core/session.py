@@ -929,6 +929,7 @@ class TranscriptionCallbacks:
         self.user_id = user_id
         self.loop = asyncio.get_running_loop()
         self.final_transcription = ""
+        self.pending_user_turn: str | None = None  # turn ended, waiting for the accurate transcript
         self.last_user_speech_time = 0  # Track when user last spoke
         self.user_speech_received = False  # Track if user spoke
         self.abort_text = ""
@@ -1187,6 +1188,15 @@ class TranscriptionCallbacks:
         logger.info(f"{Colors.apply('🖥️🔊 TTS STREAM RELEASED').blue}")
         self.tts_to_client = True # Set connection-specific flag
 
+        self.conn_state.last_turn_started_at = time.time()
+        brain = getattr(self.conn_state, "brain", None)
+        if brain:
+            # The text here is the quick realtime transcript, which often misses the
+            # last word ("Yes, that's-"). Wait for the accurate one in on_final
+            # (about 0.25 s later) before the agent answers.
+            self.pending_user_turn = user_request_content
+            return
+
         # Send final user request
         self.message_queue.put_nowait({
             "type": "final_user_request",
@@ -1204,25 +1214,12 @@ class TranscriptionCallbacks:
                     "content": self.assistant_answer
                 })
 
-        self.conn_state.last_turn_started_at = time.time()
         logger.info(f"🖥️🧠 Adding user request to history: '{user_request_content}'")
         # Use connection-specific conversation history
         self.conn_state.conversation_history.append(_conversation_message("user", user_request_content))
         # Also update the shared pipeline manager's history for this request
         self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
 
-        brain = getattr(self.conn_state, "brain", None)
-        if brain:
-            asyncio.run_coroutine_threadsafe(
-                trigger_agent_turn(
-                    self.conn_state,
-                    self,
-                    self.message_queue,
-                    text=user_request_content,
-                    reason="user_turn_completed",
-                ),
-                self.loop,
-            )
 
     def on_final(self, txt: str):
         """
@@ -1243,6 +1240,33 @@ class TranscriptionCallbacks:
                 self.final_transcription = txt
         else:
             logger.debug(f"🖥️⚠️ Ignoring empty final transcription from user {self.user_id}")
+
+        pending = getattr(self, "pending_user_turn", None)
+        if pending is not None:
+            self.pending_user_turn = None
+            accurate = txt.strip() if txt and len(txt.strip()) >= 2 else pending
+            self._start_user_turn(accurate)
+
+    def _start_user_turn(self, user_request_content: str) -> None:
+        """Send the customer's finished turn to the client and to the agent."""
+        self.conn_state.last_turn_started_at = time.time()
+        self.message_queue.put_nowait({
+            "type": "final_user_request",
+            "content": user_request_content
+        })
+        logger.info(f"🖥️🧠 Adding user request to history: '{user_request_content}'")
+        self.conn_state.conversation_history.append(_conversation_message("user", user_request_content))
+        self.conn_state.pipeline_manager.history = self.conn_state.conversation_history
+        asyncio.run_coroutine_threadsafe(
+            trigger_agent_turn(
+                self.conn_state,
+                self,
+                self.message_queue,
+                text=user_request_content,
+                reason="user_turn_completed",
+            ),
+            self.loop,
+        )
 
     def abort_generations(self, reason: str):
         """

@@ -11,3 +11,4 @@ langsmith>=0.14
 pytest
 # `langgraph dev` (LangGraph Studio). Needs Python 3.11 or newer.
 langgraph-cli[inmem]
+websockets

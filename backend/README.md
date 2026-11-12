@@ -75,6 +75,46 @@ curl http://localhost:8080/
 The first build/start can take a while because Docker downloads Python
 dependencies and model assets.
 
+## Running on Modal (serverless GPU)
+
+[`modal_app.py`](./modal_app.py) runs the same backend on [Modal](https://modal.com)
+instead of docker compose. Modal builds the image from the `Dockerfile`, starts
+one GPU container when someone connects, and serves the WebSocket at a public
+HTTPS address. The container stops after 5 idle minutes, so nothing is billed
+while nobody uses it. The free Starter plan includes $30 of credits a month
+(about $0.80 an hour on an L4).
+
+```bash
+cd backend
+.venv/bin/pip install modal
+.venv/bin/modal token new              # once, signs the CLI in to your account
+.venv/bin/modal deploy modal_app.py    # builds (long the first time), prints the https://…modal.run address
+.venv/bin/modal app stop shopeasy-voice-agent   # when you are done
+```
+
+`modal deploy` is more reliable than `modal serve` here: `serve` watches files and
+reloads, and changes under `code/` only reach the image after a full restart.
+
+- Keys: `OPENAI_API_KEY` and the `LANGSMITH_*` settings are read from `backend/.env`
+  when you run the command. Only those names are sent to Modal.
+- GPU: `MODAL_GPU=T4 .venv/bin/modal serve modal_app.py` for a T4 (default L4).
+- Cold start: the first connection after a pause took about 8 minutes in our tests
+  (Modal copies the large image to a GPU machine, then the speech models load in
+  about 30 s). Send `curl https://…modal.run/` first and wait for `"status":"ok"`.
+- Traces: `.venv/bin/modal volume ls shopeasy-voice-state traces` and
+  `.venv/bin/modal volume get shopeasy-voice-state traces/<file>.jsonl`.
+- The ShopEasy database starts fresh in every new container.
+
+Test it without a browser (macOS): a spoken test call that prints what the
+agent hears and says, and how fast it answers:
+
+```bash
+.venv/bin/python tests/voice_call.py https://<your-address>.modal.run
+```
+
+Or with the frontend: `npm run dev` in `frontend`, open `http://localhost:3000`
+and enter the `https://…modal.run` address as the server URL.
+
 ## Agent Selection
 
 All voice sessions use the same WebSocket endpoint:
