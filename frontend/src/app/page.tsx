@@ -442,6 +442,8 @@ function useAudioCapture(
   const [isCapturing, setIsCapturing] = useState(false);
   // off -> asking (permission prompt) -> on, or blocked when it can't be used.
   const [micState, setMicState] = useState<MicState>("off");
+  // True when the browser hasn't answered the permission request for a while.
+  const [micSlow, setMicSlow] = useState(false);
   // Loudness of the last ~0.2 s of microphone input, 0 to 1, to show it works.
   const [micLevel, setMicLevel] = useState(0);
   const levelPeakRef = useRef(0);
@@ -518,6 +520,10 @@ function useAudioCapture(
     void audioContext.resume();
 
     setMicState("asking");
+    setMicSlow(false);
+    // Some built-in browsers (the Claude app's browser pane, editor previews)
+    // never answer: no prompt, no error. Say so instead of waiting silently.
+    const slowTimer = window.setTimeout(() => setMicSlow(true), 6_000);
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -529,6 +535,8 @@ function useAudioCapture(
         },
       });
     } catch (error) {
+      window.clearTimeout(slowTimer);
+      setMicSlow(false);
       setMicState("blocked");
       void audioContext.close();
       audioContextRef.current = null;
@@ -542,6 +550,8 @@ function useAudioCapture(
       );
     }
 
+    window.clearTimeout(slowTimer);
+    setMicSlow(false);
     streamRef.current = stream;
 
     await audioContext.audioWorklet.addModule("/static/pcmWorkletProcessor.js");
@@ -615,6 +625,7 @@ function useAudioCapture(
   return {
     isCapturing,
     micState,
+    micSlow,
     micLevel,
     startCapture,
     stopCapture,
@@ -670,7 +681,7 @@ export default function Home() {
     isTtsPlaying,
   } = useVoiceSocket(serverUrl);
 
-  const { micState, micLevel, startCapture, stopCapture } = useAudioCapture(
+  const { micState, micSlow, micLevel, startCapture, stopCapture } = useAudioCapture(
     sendAudioData,
     () => isTtsPlayingRef.current,
   );
@@ -799,6 +810,15 @@ export default function Home() {
             <span className={`mic-dot ${micState === "on" ? "active" : ""}`} />
             <span>{micStatusText(micState, isRecording, serverStatus)}</span>
           </div>
+          {micState === "asking" && micSlow ? (
+            <div className="error-box">
+              The browser hasn&apos;t answered the microphone request. If this page is
+              open inside an app&apos;s built-in browser (like the Claude app&apos;s browser
+              pane or an editor preview), open http://localhost:3000 in Chrome,
+              Safari or Firefox instead. On macOS, also check System Settings &gt;
+              Privacy &amp; Security &gt; Microphone for your browser.
+            </div>
+          ) : null}
           {micState === "on" ? (
             <div className="mic-level" aria-label="Microphone level">
               <div
