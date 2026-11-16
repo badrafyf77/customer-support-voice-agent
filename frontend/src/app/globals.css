@@ -330,3 +330,17 @@ button:disabled {
     margin-top: 14px;
   }
 }
+
+.mic-level {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.2);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.mic-level-fill {
+  height: 100%;
+  background: #2f9e44;
+  transition: width 120ms linear;
+}

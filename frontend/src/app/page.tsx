@@ -440,6 +440,12 @@ function useAudioCapture(
   getTtsPlayingState: () => boolean,
 ) {
   const [isCapturing, setIsCapturing] = useState(false);
+  // off -> asking (permission prompt) -> on, or blocked when it can't be used.
+  const [micState, setMicState] = useState<MicState>("off");
+  // Loudness of the last ~0.2 s of microphone input, 0 to 1, to show it works.
+  const [micLevel, setMicLevel] = useState(0);
+  const levelPeakRef = useRef(0);
+  const levelUpdatedAtRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -498,18 +504,46 @@ function useAudioCapture(
   }, [flushBatch]);
 
   const startCapture = useCallback(async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate: { ideal: 48_000 },
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicState("blocked");
+      throw new Error(
+        "This browser won't allow the microphone on this address. Open the page at http://localhost:3000 (not the network 192.168… address), or over HTTPS.",
+      );
+    }
+
+    // Create and start the audio context first, while we are still inside the
+    // Start click: some browsers (Safari) only allow audio to start from a click.
+    const audioContext = new AudioContext({ sampleRate: 48_000 });
+    audioContextRef.current = audioContext;
+    void audioContext.resume();
+
+    setMicState("asking");
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: { ideal: 48_000 },
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+    } catch (error) {
+      setMicState("blocked");
+      void audioContext.close();
+      audioContextRef.current = null;
+      const name = error instanceof DOMException ? error.name : "";
+      throw new Error(
+        name === "NotAllowedError"
+          ? "The microphone is blocked. Allow it for this page (the icon in the address bar), and on macOS also in System Settings > Privacy & Security > Microphone for your browser."
+          : name === "NotFoundError"
+            ? "No microphone was found. Plug one in or pick one in your system sound settings."
+            : `Could not open the microphone: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     streamRef.current = stream;
 
-    const audioContext = new AudioContext({ sampleRate: 48_000 });
     await audioContext.audioWorklet.addModule("/static/pcmWorkletProcessor.js");
     await audioContext.resume();
 
@@ -520,6 +554,19 @@ function useAudioCapture(
     workletNode.port.onmessage = ({ data }) => {
       const incoming = new Int16Array(data);
       let readOffset = 0;
+
+      for (let index = 0; index < incoming.length; index += 1) {
+        const value = Math.abs(incoming[index]);
+        if (value > levelPeakRef.current) {
+          levelPeakRef.current = value;
+        }
+      }
+      const now = performance.now();
+      if (now - levelUpdatedAtRef.current > 200) {
+        setMicLevel(Math.min(1, levelPeakRef.current / 16_000));
+        levelPeakRef.current = 0;
+        levelUpdatedAtRef.current = now;
+      }
 
       while (readOffset < incoming.length) {
         initializeBatch();
@@ -543,9 +590,9 @@ function useAudioCapture(
     };
 
     audioContext.createMediaStreamSource(stream).connect(workletNode);
-    audioContextRef.current = audioContext;
     workletNodeRef.current = workletNode;
     setIsCapturing(true);
+    setMicState("on");
   }, [flushBatch, initializeBatch]);
 
   const stopCapture = useCallback(() => {
@@ -561,13 +608,34 @@ function useAudioCapture(
     audioContextRef.current = null;
 
     setIsCapturing(false);
+    setMicState((state) => (state === "blocked" ? state : "off"));
+    setMicLevel(0);
   }, [flushRemainder]);
 
   return {
     isCapturing,
+    micState,
+    micLevel,
     startCapture,
     stopCapture,
   };
+}
+
+type MicState = "off" | "asking" | "on" | "blocked";
+
+function micStatusText(micState: MicState, isRecording: boolean, serverStatus: string) {
+  if (micState === "asking") {
+    return "Waiting for microphone permission. Check your browser's address bar.";
+  }
+  if (micState === "blocked") {
+    return "Microphone blocked.";
+  }
+  if (micState === "on") {
+    return isRecording
+      ? "Microphone is on. The bar moves when you speak."
+      : "Microphone is on. Connecting...";
+  }
+  return serverStatus || "Ready to connect.";
 }
 
 function transcriptLabel(message: TranscriptMessage) {
@@ -602,7 +670,7 @@ export default function Home() {
     isTtsPlaying,
   } = useVoiceSocket(serverUrl);
 
-  const { startCapture, stopCapture } = useAudioCapture(
+  const { micState, micLevel, startCapture, stopCapture } = useAudioCapture(
     sendAudioData,
     () => isTtsPlayingRef.current,
   );
@@ -646,9 +714,9 @@ export default function Home() {
     setIsStarting(true);
 
     try {
-      await connect();
+      // Ask for the microphone right away (inside the click), while connecting.
+      await Promise.all([startCapture(), connect()]);
       await waitForReady(isReadyRef);
-      await startCapture();
       setIsRecording(true);
     } catch (error) {
       stopSession();
@@ -728,13 +796,17 @@ export default function Home() {
           </div>
 
           <div className="mic-status">
-            <span className={`mic-dot ${isRecording ? "active" : ""}`} />
-            <span>
-              {isRecording
-                ? "Microphone is streaming."
-                : serverStatus || "Ready to connect."}
-            </span>
+            <span className={`mic-dot ${micState === "on" ? "active" : ""}`} />
+            <span>{micStatusText(micState, isRecording, serverStatus)}</span>
           </div>
+          {micState === "on" ? (
+            <div className="mic-level" aria-label="Microphone level">
+              <div
+                className="mic-level-fill"
+                style={{ width: `${Math.round(micLevel * 100)}%` }}
+              />
+            </div>
+          ) : null}
         </aside>
 
         <section className="transcript-panel">
