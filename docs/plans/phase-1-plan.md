@@ -1,6 +1,6 @@
 # Phase 1 Plan: Foundations
 
-Status: **approved and built** on the `phase-1` branch. Still to check: the scenarios with the real models, and one voice call.
+Status: **approved and built** on the `phase-1` branch. Current state and open items: [phase-1-status.md](./phase-1-status.md).
 
 Change after the build: the agents now run on LangGraph + LangChain, traced in
 LangSmith, instead of the hand-written tool loop described in Steps 6, 8 and 9.

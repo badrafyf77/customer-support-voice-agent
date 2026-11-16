@@ -16,6 +16,8 @@ Tick a box (`[x]`) when a task is done.
 
 The detailed plan is in [../plans/phase-1-plan.md](../plans/phase-1-plan.md).
 
+Where Phase 1 stopped, and what is still open: [../plans/phase-1-status.md](../plans/phase-1-status.md).
+
 Still open (2026-11-09):
 
 - Full scenario score on LangGraph + LangChain, both agents on `gpt-5.4-mini`
@@ -26,7 +28,7 @@ Still open (2026-11-09):
   prompt (clear meaning of each status, always say why); `return_too_late` then
   passed 3/3.
 - Time to the first spoken word: 0.83 s median; 0.82 s for orders questions.
-- One real voice call in Docker.
+- One full voice call where the agent answers (the first real call, on Modal, only reached the identity step).
 
 - [x] Switch to OpenAI models that use tools well: `gpt-5.4-mini` for the
       supervisor and the orders agent (cheap; `gpt-5.5` was tried first). The GPU stays for speech,
